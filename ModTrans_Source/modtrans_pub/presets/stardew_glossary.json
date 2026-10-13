@@ -1,0 +1,8 @@
+{
+  "_note": "I 'terms' vanno compilati/verificati con la terminologia ufficiale italiana del gioco base (vedi ROADMAP: estrazione dai file .it-IT del gioco). Forme multiple = accettate entrambe.",
+  "terms": {},
+  "keep": ["Pelican Town", "Abigail", "Alex", "Elliott", "Emily", "Haley", "Harvey", "Leah",
+           "Lewis", "Marnie", "Maru", "Penny", "Pierre", "Robin", "Sam", "Sebastian", "Shane",
+           "Willy", "Linus", "Demetrius", "Caroline", "Clint", "Evelyn", "George", "Gus",
+           "Jas", "Jodi", "Kent", "Krobus", "Vincent", "Pam"]
+}
