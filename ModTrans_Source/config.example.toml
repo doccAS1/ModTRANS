@@ -1,0 +1,71 @@
+# ============================================================================
+#  modtrans configuration
+#  Copy this file to "config.toml" and edit it. Lines starting with # are
+#  comments. Text values go in "double quotes", numbers do not.
+#  See README.md ("Configuration guide") for the full explanation.
+# ============================================================================
+
+# --- General settings -------------------------------------------------------
+game       = "stardew"       # which game adapter to use (only "stardew" for now)
+workdir    = "~/.modtrans"   # where the tool keeps manifests, backups, translation memory
+                             # (Windows: use forward slashes, e.g. "C:/Users/You/modtrans-data")
+batch_size = 15              # strings sent to the LLM per request.
+                             # Cloud: 15-30 is fine. Small local models: use 5-8.
+
+# ============================================================================
+#  ENGINES
+#  Every role below (translator, judge_a, judge_b, repair) is configured with
+#  the same set of keys. "type" chooses WHICH KIND of engine runs that role:
+#
+#    type = "anthropic"      Claude via the Anthropic cloud API (needs an API key)
+#    type = "openai_compat"  Any server that speaks the OpenAI chat API format:
+#                            Ollama, LM Studio, llama.cpp, vLLM (local, free),
+#                            or OpenAI / OpenRouter (cloud). Choose the server
+#                            with base_url.
+#    type = "mock"           Fake engine for testing the pipeline. No cost,
+#                            no real translation (it just prefixes "[IT] ").
+#
+#  Other keys:
+#    model        Name of the model to use (must exist on that provider/server).
+#    api_key_env  NAME of the environment variable holding your API key
+#                 (never paste the key itself in this file).
+#    base_url     (openai_compat only) address of the server.
+#    max_tokens   (optional) max length of each reply. Default 4096.
+#    temperature  (optional, openai_compat only) creativity. Default 0.2.
+# ============================================================================
+
+# --- Translator: does the actual EN -> IT translation -----------------------
+[translator]
+type = "openai_compat"
+model = "deepseek/deepseek-v4.1-flash"
+api_key_env = "OPENROUTER_API_KEY"
+
+# Local alternative: comment out the block above and uncomment this one.
+# [translator]
+# type = "openai_compat"
+# base_url = "http://localhost:11434/v1"   # Ollama. LM Studio: http://localhost:1234/v1
+# model = "qwen2.5:14b"                    # must match a model you have pulled/loaded
+# batch_size is read from the general section above
+
+# --- Judge A (Accuracy): is the meaning faithful? ---------------------------
+# Optional. If you remove this whole section, Judge A runs only its free,
+# deterministic checks (placeholders, numbers, glossary): still useful, zero cost.
+# Tip: use a DIFFERENT model than the translator so they don't share blind spots.
+[judge_a]
+type = "openai_compat"
+model = "nvidia/nemotron-3-ultra-550b-a55b:free"
+api_key_env = "OPENROUTER_API_KEY"
+
+# --- Judge B (Fluency): does it sound natural in Italian and in-game? -------
+# Optional. If omitted, the translator's engine is reused for this role.
+[judge_b]
+type = "openai_compat"
+model = "tencent/hy3"
+api_key_env = "OPENROUTER_API_KEY"
+
+# --- Repair agent: fixes strings the judges rejected (max 2 attempts) -------
+# Optional. If omitted, the translator's engine is reused.
+# [repair]
+# type = "anthropic"
+# model = "claude-sonnet-5-5"
+# api_key_env = "ANTHROPIC_API_KEY"
