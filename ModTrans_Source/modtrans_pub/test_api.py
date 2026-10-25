@@ -9,7 +9,7 @@ if not key:
     print("ERRORE: Python non riesce a leggere la variabile d'ambiente. Riavvia il PC o l'editor.")
     exit()
 
-print(f"Chiave trovata! Inizia con: {key[:15]}...")
+print("Chiave trovata!")
 
 url = "https://openrouter.ai/api/v1/chat/completions"
 headers = {

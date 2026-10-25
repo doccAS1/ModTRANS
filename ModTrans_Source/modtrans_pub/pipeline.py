@@ -68,17 +68,6 @@ def run(mod_dir, cfg, dry_run=False, log=print):
         
     preset = json.load(open(PKG / "presets" / f"{game}.json", encoding="utf-8"))
     
-    # 3. INIEZIONE DINAMICA DELLE LINGUE NEI PROMPT
-    lang_prompt = f"\n\nCRITICAL INSTRUCTION: You must translate the text from {source_name} to {target_name}. Output ONLY in {target_name}."
-    if "translator" in preset: 
-        preset["translator"] += lang_prompt
-    if "judge_a" in preset: 
-        preset["judge_a"] += f"\n\nCRITICAL INSTRUCTION: Evaluate if the text is accurately translated into {target_name}."
-    if "judge_b" in preset: 
-        preset["judge_b"] += f"\n\nCRITICAL INSTRUCTION: Evaluate if the {target_name} text sounds natural and fluent."
-    if "repair" in preset: 
-        preset["repair"] += f"\n\nCRITICAL INSTRUCTION: Fix the {target_name} translation based on the provided issues."
-        
     glossary = Glossary.load(PKG / "presets" / f"{game}_glossary.json")
     gh = glossary.hash()
     tmk = f"{gh}.{target_code}"   # la translation memory è per lingua di destinazione

@@ -1,7 +1,7 @@
 {
   "game": "Stardew Valley",
   "setting": "Gioco di simulazione agricola/vita rurale, tono caldo, cozy e leggero con venature malinconiche. Ambientato a Pelican Town e dintorni (Valle Stardew).",
-  "tone": "Informale: dai del 'tu' al giocatore. Frasi brevi e naturali, come in dialoghi parlati. Niente linguaggio burocratico o da traduzione letterale.",
+  "tone": "Informale: rivolgiti al giocatore in modo diretto e familiare (usa la forma confidenziale, dove la lingua di destinazione la prevede). Frasi brevi e naturali, come in dialoghi parlati. Niente linguaggio burocratico o da traduzione letterale.",
   "style_rules": [
     "I nomi propri di personaggi e luoghi restano invariati.",
     "Rispetta il genere grammaticale con cura: il giocatore può essere maschio o femmina, preferisci formulazioni neutre se il testo non usa ^ per distinguere.",
