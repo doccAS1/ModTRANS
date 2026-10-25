@@ -12,13 +12,119 @@ except ImportError:
     import tomli as tomllib
 
 from . import pipeline
-from .pipeline import pick_adapter
-from .core.project import Project
+from .core.masking import mask
 
 class ReviewWindow(tk.Toplevel):
-    # ... [MANTIENI IL CODICE DELLA REVIEW WINDOW ESATTAMENTE COM'ERA] ...
-    # (Per brevità non lo riscrivo, è identico alla versione precedente in inglese che hai già)
-    pass # Sostituisci questo blocco con la tua ReviewWindow completa
+    """Revisione manuale: mostra le stringhe REVISION / BLOCK / PUBLISH_WITH_NOTE,
+    permette di correggerle o approvarle e poi riscrive i file della mod."""
+
+    def __init__(self, parent, mod_dir, cfg, items, on_done=None):
+        super().__init__(parent)
+        self.title(f"Manual Review - {Path(mod_dir).name}")
+        self.geometry("980x600")
+        self.minsize(800, 480)
+        self.mod_dir, self.cfg, self.items, self.on_done = mod_dir, cfg, items, on_done
+        self.pending = {}          # key -> testo finale approvato/modificato
+        self.current = None
+
+        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        left = ttk.Frame(paned)
+        self.tree = ttk.Treeview(left, columns=("decision", "key"), show="headings", selectmode="browse")
+        self.tree.heading("decision", text="Status")
+        self.tree.heading("key", text="Key")
+        self.tree.column("decision", width=130, stretch=False)
+        self.tree.column("key", width=260)
+        sb = ttk.Scrollbar(left, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.tag_configure("approved", foreground="#2e7d32")
+        for k, v in items.items():
+            self.tree.insert("", tk.END, iid=k, values=(v["decision"], k))
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        paned.add(left, weight=1)
+
+        right = ttk.Frame(paned, padding=(8, 0, 0, 0))
+        ttk.Label(right, text="Original:").pack(anchor=tk.W)
+        self.src_text = tk.Text(right, height=6, wrap=tk.WORD, state=tk.DISABLED)
+        self.src_text.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(right, text="Judges' notes:").pack(anchor=tk.W)
+        self.issues_lbl = ttk.Label(right, text="", wraplength=520, justify=tk.LEFT)
+        self.issues_lbl.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(right, text="Translation (editable):").pack(anchor=tk.W)
+        self.dst_text = tk.Text(right, height=8, wrap=tk.WORD)
+        self.dst_text.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+        btns = ttk.Frame(right)
+        btns.pack(fill=tk.X)
+        ttk.Button(btns, text="Approve / Save edit", command=self.approve).pack(side=tk.LEFT, padx=2)
+        self.apply_btn = ttk.Button(btns, text="Apply to mod (0)", command=self.apply)
+        self.apply_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Button(btns, text="Close", command=self.destroy).pack(side=tk.RIGHT, padx=2)
+        paned.add(right, weight=3)
+
+        if items:
+            first = next(iter(items))
+            self.tree.selection_set(first)
+
+    def _set_text(self, widget, text, editable=False):
+        widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        widget.insert("1.0", text)
+        if not editable:
+            widget.configure(state=tk.DISABLED)
+
+    def _on_select(self, _event=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        key = sel[0]
+        self.current = key
+        v = self.items[key]
+        self._set_text(self.src_text, v["src"])
+        notes = "; ".join(f"[{i.get('type', '?')}] {i.get('detail', '')}" for i in v.get("issues", [])) or "-"
+        self.issues_lbl.configure(text=notes)
+        self._set_text(self.dst_text, self.pending.get(key, v["dst"]), editable=True)
+
+    def approve(self):
+        if not self.current:
+            return
+        text = self.dst_text.get("1.0", tk.END).rstrip("\n")
+        if not text.strip():
+            messagebox.showwarning("Empty translation", "Write a translation before approving.", parent=self)
+            return
+        src = self.items[self.current]["src"]
+        if sorted(mask(src)[1]) != sorted(mask(text)[1]):
+            if not messagebox.askyesno(
+                    "Game codes differ",
+                    "The game codes (@, $h, {{Token}}, #$b# ...) in the translation do not match the original.\n"
+                    "This can break the mod. Save anyway?", parent=self):
+                return
+        self.pending[self.current] = text
+        self.tree.item(self.current, tags=("approved",), values=("approved", self.current))
+        self.apply_btn.configure(text=f"Apply to mod ({len(self.pending)})")
+        # passa automaticamente alla stringa successiva
+        nxt = self.tree.next(self.current)
+        if nxt:
+            self.tree.selection_set(nxt)
+            self.tree.see(nxt)
+
+    def apply(self):
+        if not self.pending:
+            messagebox.showinfo("Nothing to apply", "Approve at least one string first.", parent=self)
+            return
+        try:
+            n = pipeline.apply_review(self.mod_dir, self.cfg, self.pending)
+        except (Exception, SystemExit) as e:
+            messagebox.showerror("Error", f"Could not apply the review:\n{e}", parent=self)
+            return
+        messagebox.showinfo("Done", f"{n} string(s) updated in the mod.", parent=self)
+        if self.on_done:
+            self.on_done(n)
+        self.destroy()
+
 
 class ModTransGUI(tk.Tk):
     def __init__(self):
@@ -117,8 +223,30 @@ class ModTransGUI(tk.Tk):
             self._save_settings()
 
     def browse_zip(self):
-        # ... [MANTIENI IL TUO CODICE PER BROWSE ZIP] ...
-        pass
+        f = filedialog.askopenfilename(title="Select the mod .zip", filetypes=[("ZIP archive", "*.zip")])
+        if not f:
+            return
+        zpath = Path(f)
+        dest = zpath.parent / f"{zpath.stem}_extracted"
+        try:
+            if dest.exists() and any(dest.iterdir()):
+                if not messagebox.askyesno("Folder exists",
+                                           f"'{dest.name}' already exists. Extract over it (files may be overwritten)?"):
+                    return
+            dest.mkdir(parents=True, exist_ok=True)
+            root = dest.resolve()
+            with zipfile.ZipFile(zpath) as z:
+                for name in z.namelist():           # protezione zip-slip
+                    if not (root / name).resolve().is_relative_to(root):
+                        raise ValueError(f"unsafe path in archive: {name}")
+                z.extractall(dest)
+            manifests = sorted(dest.rglob("manifest.json"), key=lambda p: len(p.parts))
+            if not manifests:
+                raise FileNotFoundError("no manifest.json found inside the archive (is it a SMAPI mod?)")
+            self.mod_dir.set(str(manifests[0].parent))
+            self.log(f"Extracted {zpath.name} -> {manifests[0].parent}")
+        except Exception as e:
+            messagebox.showerror("ZIP error", f"Unable to open the archive:\n{e}")
 
     def browse_config(self):
         if f := filedialog.askopenfilename(title="Select config.toml", filetypes=[("TOML", "*.toml")]):
@@ -145,20 +273,25 @@ class ModTransGUI(tk.Tk):
             messagebox.showerror("Config Error", f"Unable to read config:\n{e}")
             return None
 
+    def _prepare_cfg(self):
+        """Carica il TOML e vi inietta le lingue scelte nella GUI."""
+        cfg = self._load_config()
+        if not cfg:
+            return None
+        tgt_full = self.target_lang.get()
+        cfg["target_lang_code"] = tgt_full[tgt_full.find("(")+1 : tgt_full.find(")")] if "(" in tgt_full else "it"
+        cfg["target_lang_name"] = tgt_full.split("(")[0].strip()
+        cfg["source_lang_name"] = self.source_lang.get()
+        return cfg
+
     def start_translation(self):
         mod = self.mod_dir.get()
         if not mod:
             messagebox.showwarning("Warning", "Please select a mod folder.")
             return
-            
-        cfg = self._load_config()
-        if not cfg: return
 
-        # Inietta le lingue scelte dall'utente nel dizionario di configurazione per passarle al backend
-        tgt_full = self.target_lang.get()
-        cfg["target_lang_code"] = tgt_full[tgt_full.find("(")+1 : tgt_full.find(")")] if "(" in tgt_full else "it"
-        cfg["target_lang_name"] = tgt_full.split("(")[0].strip()
-        cfg["source_lang_name"] = self.source_lang.get()
+        cfg = self._prepare_cfg()
+        if not cfg: return
 
         self.btn_translate.state(['disabled'])
         self.log(f"\n--- Starting translation for: {Path(mod).name} ---")
@@ -166,34 +299,69 @@ class ModTransGUI(tk.Tk):
 
     def _run_pipeline(self, mod_dir, cfg):
         try:
-            pipeline.run(mod_dir, cfg, dry_run=False, log=self.log)
+            result = pipeline.run(mod_dir, cfg, dry_run=False, log=self.log)
+            if result is None:
+                # mod bloccata dall'autore o senza file traducibili: niente da consegnare
+                self.log("Nothing was translated, so nothing was deployed.")
+                return
             self.log("Translation completed.")
-            
-            # --- FASE DI DEPLOY AUTOMATICO ---
-            export_dir = self.mods_folder.get().strip()
-            if export_dir and Path(export_dir).exists():
-                src_path = Path(mod_dir)
-                dest_path = Path(export_dir) / src_path.name
-                
-                # Evita di copiare se la mod sorgente è GIÀ nella cartella Mods di destinazione
-                if src_path.resolve() != dest_path.resolve():
-                    self.log(f"Deploying mod to: {dest_path} ...")
-                    if dest_path.exists():
-                        shutil.rmtree(dest_path)
-                    shutil.copytree(src_path, dest_path)
-                    self.log("Deployment successful! Mod is ready to play.")
-        except Exception as e:
+            self._deploy(Path(mod_dir))
+        except (Exception, SystemExit) as e:
             self.log(f"CRITICAL ERROR: {str(e)}")
         finally:
             self.btn_translate.state(['!disabled'])
-            
+
+    def _deploy(self, src_path):
+        """Copia la mod tradotta nella cartella Mods. Unisce i file senza cancellare nulla."""
+        export_dir = self.mods_folder.get().strip()
+        if not export_dir or not Path(export_dir).exists():
+            return
+        dest_path = Path(export_dir) / src_path.name
+        src, dest = src_path.resolve(), dest_path.resolve()
+        if src == dest:                     # la mod è già nella cartella Mods
+            return
+        if src in dest.parents or dest in src.parents:
+            self.log(f"Deploy skipped: '{src_path.name}' and the Mods folder overlap.")
+            return
+        self.log(f"Deploying mod to: {dest_path} ...")
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+        self.log("Deployment successful! Mod is ready to play.")
+
     def open_review(self):
-        # ... [MANTIENI IL TUO CODICE DELLA REVIEW] ...
-        pass
-        
+        mod = self.mod_dir.get()
+        if not mod:
+            messagebox.showwarning("Warning", "Please select a mod folder.")
+            return
+        cfg = self._prepare_cfg()
+        if not cfg: return
+        try:
+            items = pipeline.load_review(mod, cfg)
+        except (Exception, SystemExit) as e:
+            messagebox.showerror("Error", f"Unable to load the review queue:\n{e}")
+            return
+        if not items:
+            messagebox.showinfo("Manual Review", "No strings are waiting for review for this mod.")
+            return
+        ReviewWindow(self, mod, cfg, items,
+                     on_done=lambda n: self.log(f"Manual review applied: {n} string(s) updated."))
+
     def restore_backup(self):
-        # ... [MANTIENI IL TUO CODICE DEL RESTORE] ...
-        pass
+        mod = self.mod_dir.get()
+        if not mod:
+            messagebox.showwarning("Warning", "Please select a mod folder.")
+            return
+        cfg = self._prepare_cfg()
+        if not cfg: return
+        if not messagebox.askyesno("Restore backup",
+                                   "Roll the mod back to the state before the last run?"):
+            return
+        try:
+            ok = pipeline.restore(mod, cfg)
+        except (Exception, SystemExit) as e:
+            messagebox.showerror("Error", f"Restore failed:\n{e}")
+            return
+        self.log("Backup restored." if ok else "No backup available for this mod.")
+
 
 if __name__ == "__main__":
     app = ModTransGUI()

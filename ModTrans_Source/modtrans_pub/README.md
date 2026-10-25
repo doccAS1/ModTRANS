@@ -2,7 +2,14 @@
 
 Currently supports **Stardew Valley** (SMAPI / Content Patcher mods with an `i18n/default.json`).
 It translates the mod, validates the result with two judges, repairs errors, and writes
-`i18n/it.json` into the mod folder (the original files are never modified).
+`i18n/<lang>.json` into the mod folder (e.g. `i18n/it.json`).
+
+**What gets modified in the mod folder:** `i18n/<lang>.json` is created/updated, and the
+`Description` field of `manifest.json` is replaced with its translation. For mods without
+`i18n/default.json`, `content.json` is rewritten in place (only whitelisted text fields; the
+structure is preserved). Before every write the previous state is backed up, and
+`restore` rolls it back. On re-runs, text that the tool itself wrote is recognized and not
+translated again. `i18n/default.json` is never touched.
 
 Requirements: Python 3.11+, no external packages.
 
@@ -51,7 +58,7 @@ different model or even a different provider (e.g. translate locally, judge in t
 |---|---|---|
 | `[translator]` | Does the EN → IT translation. **Required.** | (error) |
 | `[judge_a]` | **Accuracy**: checks the meaning is faithful (omissions, wrong terms). Runs *after* free built-in checks on placeholders, numbers and glossary, which always run. Strong veto: if A rejects, the string goes to repair. | Only the free built-in checks run (no LLM cost) |
-| `[judge_b]` | **Fluency**: checks that it sounds natural, matches the character's tone, fits the game. Soft veto: can downgrade a result to "publish with note" or "human review", never triggers repair alone. | Reuses the translator's engine |
+| `[judge_b]` | **Fluency**: checks that it sounds natural, matches the character's tone, fits the game. Soft veto: can downgrade a result to "publish with note" or "human review", never triggers repair alone. | Skipped (the other checks still decide) |
 | `[repair]` | Fixes strings Judge A rejected with a minimal patch (max 2 attempts, then the string is blocked or sent to human review). | Reuses the translator's engine |
 
 Using a **different model for the judges than for the translator** is recommended: a model tends to
@@ -150,7 +157,10 @@ example file were valid when it was written.
 3. Translates the rest in batches, using the game preset (tone, characters) and the glossary.
 4. Judge A and Judge B score each string → decision `PUBLISH`, `PUBLISH_WITH_NOTE`, `REPAIR`, `REVISION` (human), or `BLOCK`.
 5. Rejected strings go through up to 2 repair attempts.
-6. Backs up the previous state, then writes `i18n/it.json`. `BLOCK`ed strings are left out, so the game shows the English text for them.
+6. Backs up the previous state, then writes `i18n/<lang>.json` (and the translated `Description` in `manifest.json`;
+   `content.json` for mods without i18n). `BLOCK`ed strings are left out, so the game shows the English text for them.
+
+Translation memory, manifests and backups are kept **per target language**, so translating the same mod into several languages never mixes them up.
 
 Strings that need a human look are listed in `review.json` inside the mod's folder under your `workdir`.
 If the mod already ships its own `it.json`, the author's translations are kept and only missing keys are filled in.
