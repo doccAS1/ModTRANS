@@ -1,8 +1,8 @@
-# modtrans: automatic mod translator → Italian
+# modtrans: automatic mod translator
 
 Currently supports **Stardew Valley** (SMAPI / Content Patcher mods with an `i18n/default.json`).
 It translates the mod, validates the result with two judges, repairs errors, and writes
-`i18n/<lang>.json` into the mod folder (e.g. `i18n/it.json`).
+`i18n/<lang>.json` into the mod folder.
 
 **What gets modified in the mod folder:** `i18n/<lang>.json` is created/updated, and the
 `Description` field of `manifest.json` is replaced with its translation. For mods without
@@ -56,7 +56,7 @@ different model or even a different provider (e.g. translate locally, judge in t
 
 | Section | Job | If you omit it |
 |---|---|---|
-| `[translator]` | Does the EN → IT translation. **Required.** | (error) |
+| `[translator]` | Does the translation. **Required.** | (error) |
 | `[judge_a]` | **Accuracy**: checks the meaning is faithful (omissions, wrong terms). Runs *after* free built-in checks on placeholders, numbers and glossary, which always run. Strong veto: if A rejects, the string goes to repair. | Only the free built-in checks run (no LLM cost) |
 | `[judge_b]` | **Fluency**: checks that it sounds natural, matches the character's tone, fits the game. Soft veto: can downgrade a result to "publish with note" or "human review", never triggers repair alone. | Skipped (the other checks still decide) |
 | `[repair]` | Fixes strings Judge A rejected with a minimal patch (max 2 attempts, then the string is blocked or sent to human review). | Reuses the translator's engine |
@@ -163,4 +163,4 @@ example file were valid when it was written.
 Translation memory, manifests and backups are kept **per target language**, so translating the same mod into several languages never mixes them up.
 
 Strings that need a human look are listed in `review.json` inside the mod's folder under your `workdir`.
-If the mod already ships its own `it.json`, the author's translations are kept and only missing keys are filled in.
+If the mod already ships its own translation file for the target language, the author's translations are kept and only missing keys are filled in.

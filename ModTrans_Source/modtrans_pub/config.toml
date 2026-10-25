@@ -11,7 +11,7 @@ batch_size = 65              # stringhe per richiesta
 #  ENGINES
 # ============================================================================
 
-# --- Translator: does the actual EN -> IT translation -----------------------
+# --- Translator: does the actual translation --------------------------------
 [translator]
 type = "openai_compat"
 base_url = "https://openrouter.ai/api/v1"
@@ -25,7 +25,7 @@ api_key_env = "OPEN_ROUTER_API_KEY"
 # model = "openai/gpt-6-luna"
 # api_key_env = "OPEN_ROUTER_API_KEY"
 
-# --- Judge B (Fluency): does it sound natural in Italian and in-game? -------
+# --- Judge B (Fluency): does it sound natural in the target language and in-game? --
 # [judge_b]
 # type = "openai_compat"
 # base_url = "https://openrouter.ai/api/v1"

@@ -5,7 +5,7 @@ from . import pipeline
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser("modtrans", description="Traduttore automatico di mod -> italiano")
+    ap = argparse.ArgumentParser("modtrans", description="Traduttore automatico di mod")
     ap.add_argument("command", choices=["translate", "restore", "review"])
     ap.add_argument("mod_dir")
     ap.add_argument("-c", "--config", default="config.toml")
