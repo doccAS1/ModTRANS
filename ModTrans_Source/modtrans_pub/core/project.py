@@ -10,8 +10,10 @@ def sha(s):
 
 
 class Project:
-    def __init__(self, workdir, game, mod_id, mod_version, existing_output_keys=()):
+    def __init__(self, workdir, game, mod_id, mod_version, existing_output_keys=(), lang="it"):
         safe = re.sub(r"[^\w.-]+", "_", mod_id)
+        if lang != "it":            # "it" mantiene il percorso storico, così i backup vecchi restano validi
+            safe = f"{safe}__{re.sub(r'[^\w-]+', '_', lang)}"
         self.dir = Path(workdir) / "projects" / game / safe
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "manifest.json"
