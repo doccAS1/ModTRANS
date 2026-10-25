@@ -8,11 +8,11 @@ class RepairAgent:
     """Propone una patch minima; se la modifica è troppo invasiva viene scartata."""
     MIN_SIMILARITY = 0.5
 
-    def __init__(self, engine, preset):
-        self.engine, self.preset = engine, preset
+    def __init__(self, engine, preset, target_lang="la lingua di destinazione"):
+        self.engine, self.preset, self.target_lang = engine, preset, target_lang
 
     def repair(self, unit, tr, issues):
-        system = ("# ROLE: repair\nCorreggi la traduzione EN->IT risolvendo SOLO i problemi elencati, con la modifica più piccola possibile. "
+        system = (f"# ROLE: repair\nCorreggi la traduzione verso {self.target_lang} risolvendo SOLO i problemi elencati, con la modifica più piccola possibile. "
                   "Conserva tutti i segnaposto ⟦N⟧ esattamente una volta ciascuno.\n"
                   f'Rispondi SOLO JSON: {{"text":"traduzione corretta"}}\n{preset_block(self.preset)}')
         r = extract_json(self.engine.chat(system, json.dumps(

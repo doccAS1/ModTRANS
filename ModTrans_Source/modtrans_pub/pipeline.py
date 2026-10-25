@@ -95,9 +95,9 @@ def run(mod_dir, cfg, dry_run=False, log=print):
     translator = Translator(t_eng, preset, glossary, cfg.get("batch_size", 15), source_name, target_name)
     # Il Giudice A esiste sempre: senza motore LLM esegue solo i controlli deterministici
     # (segnaposto, numeri, glossario, lunghezza), come descritto nel README.
-    judge_a = JudgeA(glossary, ja_eng, preset)
-    judge_b = JudgeB(jb_eng, preset) if jb_eng else None
-    repairer = RepairAgent(make_engine(cfg["repair"]) if "repair" in cfg else t_eng, preset)
+    judge_a = JudgeA(glossary, ja_eng, preset, target_name)
+    judge_b = JudgeB(jb_eng, preset, target_name) if jb_eng else None
+    repairer = RepairAgent(make_engine(cfg["repair"]) if "repair" in cfg else t_eng, preset, target_name)
 
     units = adapter.extract()
     _recover_original_sources(units, project)

@@ -34,7 +34,7 @@ batch_size = 15              # strings sent to the LLM per request.
 #    temperature  (optional, openai_compat only) creativity. Default 0.2.
 # ============================================================================
 
-# --- Translator: does the actual EN -> IT translation -----------------------
+# --- Translator: does the actual translation --------------------------------
 [translator]
 type = "openai_compat"
 model = "deepseek/deepseek-v4.1-flash"
@@ -56,7 +56,7 @@ type = "openai_compat"
 model = "nvidia/nemotron-3-ultra-550b-a55b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
-# --- Judge B (Fluency): does it sound natural in Italian and in-game? -------
+# --- Judge B (Fluency): does it sound natural in the target language and in-game? --
 # Optional. If omitted, the translator's engine is reused for this role.
 [judge_b]
 type = "openai_compat"

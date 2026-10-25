@@ -19,7 +19,7 @@ class Project:
         self.path = self.dir / "manifest.json"
         if self.path.exists():
             self.m = json.load(open(self.path, encoding="utf-8"))
-        else:  # prima volta: ciò che esiste già in it.json è dell'autore, non nostro
+        else:  # prima volta: ciò che esiste già nel file di output della lingua è dell'autore, non nostro
             self.m = {"game": game, "mod_id": mod_id, "foreign_keys": sorted(existing_output_keys),
                       "units": {}}
         self.m["mod_version"] = mod_version
