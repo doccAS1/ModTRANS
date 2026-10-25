@@ -19,6 +19,8 @@ Requirements: Python 3.11+, no external packages.
     python -m modtrans translate "C:/.../Stardew Valley/Mods/SomeMod" -c config.toml
 
 Run these from the folder that **contains** the `modtrans/` folder.
+In the GitHub repository that folder is called `modtrans_pub`: rename it to `modtrans` to use the `python -m modtrans` commands
+(`start.py` and the GUI work with either name).
 
 | Command | What it does |
 |---|---|
