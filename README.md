@@ -109,7 +109,22 @@ write(mapping)         # put the translated strings back, structure untouched
 Everything else (masking, translation, judging, repair, memory, backups, review, GUI) is shared.
 See `ModTrans_Source/modtrans_pub/adapters/` for the Stardew Valley adapter.
 
-## Getting started
+## Download (Windows)
+
+If you just want to use it, no Python needed: download `ModTrans-windows.zip` from the
+[Releases](../../releases) page, unzip it, and run `ModTrans.exe`. Next to it you'll find `config.toml`
+(edit it to choose your AI provider), and the app creates it for you if it's missing.
+
+You still need an API key for the AI provider you choose (or a local model). With the default config, set
+`OPENROUTER_API_KEY` as described in the [user guide](ModTrans_Source/modtrans_pub/README.md#setting-your-api-key-cloud-engines).
+
+> **Antivirus warning:** executables built with PyInstaller are sometimes flagged by Windows
+> Defender or other antivirus software as a false positive. The program is fully open source: you can read the
+> code here and build the `.exe` yourself with `build_exe.bat`, or run it from source with `python start.py`.
+
+The `.exe` also accepts the command line, for example `ModTrans.exe translate "<mod folder>" -c config.toml`.
+
+## Getting started (from source)
 
 Follow the [user guide](ModTrans_Source/modtrans_pub/README.md). In short: install Python 3.11+, copy
 `config.example.toml` to `config.toml`, add the key of the AI provider you want to use (or point it to a local model),
