@@ -32,9 +32,12 @@ jobs:
           Copy-Item ModTrans_Source/modtrans_pub ./modtrans -Recurse
           python -m modtrans.tests.test_core
 
-      - name: Build ModTrans.exe
-        run: python -m pyinstaller --noconfirm --clean --distpath dist --workpath build ModTrans_Source/modtrans.spec
-
+      - name: Install and Build ModTrans.exe
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pyinstaller --noconfirm --clean --distpath dist --workpath build ModTrans_Source/modtrans.spec
+          
       - name: Package
         shell: pwsh
         run: |
