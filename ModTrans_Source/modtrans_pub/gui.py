@@ -4,6 +4,7 @@ import threading
 import queue
 import json
 import shutil
+import sys
 from pathlib import Path
 
 try:
@@ -127,6 +128,25 @@ class ReviewWindow(tk.Toplevel):
         self.destroy()
 
 
+def _app_dir():
+    """Cartella dell'eseguibile (se impacchettato) oppure la cartella di lavoro corrente."""
+    return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
+
+
+def _default_config():
+    """Percorso del config.toml predefinito. Nell'eseguibile, al primo avvio lo crea
+    copiando config.example.toml incluso nel pacchetto."""
+    path = _app_dir() / "config.toml"
+    if getattr(sys, "frozen", False) and not path.exists():
+        example = Path(getattr(sys, "_MEIPASS", _app_dir())) / "config.example.toml"
+        try:
+            if example.exists():
+                shutil.copyfile(example, path)
+        except OSError:
+            pass
+    return str(path)
+
+
 class ModTransGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -140,11 +160,11 @@ class ModTransGUI(tk.Tk):
         self.target_lang = tk.StringVar(value="Italian (it)")
         
         self.settings_file = Path.home() / ".modtrans_gui.json"
-        last_config = "config.toml"
+        last_config = _default_config()
         if self.settings_file.exists():
             try:
                 saved = json.loads(self.settings_file.read_text(encoding="utf-8"))
-                last_config = saved.get("last_config", "config.toml")
+                last_config = saved.get("last_config", last_config)
                 self.mods_folder.set(saved.get("mods_folder", ""))
                 self.source_lang.set(saved.get("source_lang", "Auto"))
                 self.target_lang.set(saved.get("target_lang", "Italian (it)"))
