@@ -11,11 +11,76 @@ def sha(s):
     return hashlib.sha1(s.encode()).hexdigest()[:12]
 
 
+def safe_id(mod_id):
+    safe = re.sub(r"[^\w.-]+", "_", mod_id)
+    return safe if safe.strip(".") else "_"       # "." e ".." non devono diventare percorsi
+
+
+class Originals:
+    """Testi ORIGINALI delle stringhe che il tool riscrive sul posto (Description del manifest,
+    content.json). Sono per mod e non dipendono dalla lingua di destinazione: così un run non parte
+    mai da un testo già tradotto, nemmeno passando da una lingua all'altra (it -> fr -> it).
+
+    Per ogni chiave: {"orig": testo originale, "written": [testi che abbiamo scritto noi]}.
+    Se il testo sul disco è l'originale o uno dei nostri, la sorgente è l'originale; se è un testo
+    diverso, l'autore ha aggiornato la mod e il nuovo testo diventa l'originale."""
+    MAX_WRITTEN = 50
+
+    def __init__(self, workdir, game, mod_id):
+        self.mod_id = mod_id
+        self.game_dir = Path(workdir) / "projects" / game
+        self.safe = safe_id(mod_id)
+        self.path = self.game_dir / self.safe / "originals.json"
+        self.d, self._projects = {}, None
+        if self.path.exists():
+            try:
+                self.d = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                self.d = {}            # registro rovinato: si riparte dai manifest dei progetti
+
+    def _known_pairs(self, key):
+        """(originale, traduzione) già nei manifest di tutte le lingue di questa mod: serve a
+        riconoscere l'output di versioni del tool che non avevano ancora questo registro."""
+        if self._projects is None:
+            self._projects = []
+            if self.game_dir.exists():
+                for d in self.game_dir.iterdir():
+                    if d.name != self.safe and not d.name.startswith(self.safe + "__"):
+                        continue
+                    try:
+                        m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    if m.get("mod_id") == self.mod_id:
+                        self._projects.append(m.get("units", {}))
+        return [(u["src"], u["dst"]) for units in self._projects
+                if (u := units.get(key)) and u.get("src") and u.get("dst") and u["src"] != u["dst"]]
+
+    def resolve(self, key, disk_text):
+        e = self.d.get(key)
+        if e and (disk_text == e["orig"] or disk_text in e["written"]):
+            return e["orig"]
+        pairs = self._known_pairs(key)
+        for src, dst in pairs:
+            if dst == disk_text:       # è una traduzione scritta da noi in un run precedente
+                self.d[key] = {"orig": src, "written": sorted({x for _, x in pairs})[-self.MAX_WRITTEN:]}
+                return src
+        self.d[key] = {"orig": disk_text, "written": []}   # primo run, oppure testo aggiornato dall'autore
+        return disk_text
+
+    def record(self, key, dst):
+        e = self.d.get(key)
+        if e and dst != e["orig"] and dst not in e["written"]:
+            e["written"] = (e["written"] + [dst])[-self.MAX_WRITTEN:]
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(self.path, json.dumps(self.d, ensure_ascii=False, indent=2))
+
+
 class Project:
     def __init__(self, workdir, game, mod_id, mod_version, existing_output_keys=(), lang="it"):
-        safe = re.sub(r"[^\w.-]+", "_", mod_id)
-        if not safe.strip("."):        # "." e ".." non devono diventare percorsi
-            safe = "_"
+        safe = safe_id(mod_id)
         if lang != "it":            # "it" mantiene il percorso storico, così i backup vecchi restano validi
             safe = f"{safe}__{re.sub(r'[^\w-]+', '_', lang)}"
         self.dir = Path(workdir) / "projects" / game / safe

@@ -109,6 +109,7 @@ def apply_mapping(data, mapping, path=""):
 
 class StardewAdapter(Adapter):
     game = "stardew"
+    inplace_files = ("manifest.json", "content.json")
 
     def __init__(self, mod_dir, target_code="it"):
         self.LANG = valid_lang(target_code)

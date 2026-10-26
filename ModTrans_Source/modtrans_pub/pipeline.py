@@ -7,7 +7,7 @@ from .core.glossary import Glossary
 from .core.masking import mask, strip_tokens, unmask
 from .core.memory import TranslationMemory
 from .core.models import Decision
-from .core.project import Project, sha
+from .core.project import Originals, Project, sha
 from .engines.base import make_engine
 from .qa.aggregate import aggregate
 from .qa.judges import JudgeA, JudgeB
@@ -17,6 +17,8 @@ from .translator import Translator
 PKG = Path(__file__).parent
 GOOD = {"PUBLISH", "PUBLISH_WITH_NOTE"}
 MAX_REPAIRS = 2
+MAX_ENGINE_FAILS = 3
+ENGINE_RETRY_NOTE = "(non verificata: verrà ritentata al prossimo avvio)"
 
 def _lang(cfg):
     try:
@@ -43,14 +45,18 @@ def _build_mapping(units, project, existing):
     return mapping
 
 
-def _recover_original_sources(units, project):
-    """Se il testo trovato nella mod è quello che abbiamo scritto noi in un run precedente
-    (Description del manifest, content.json riscritto sul posto), la sorgente è l'originale
-    memorizzato: così un nuovo run non ritraduce la nostra stessa traduzione."""
+def _resolve_inplace_sources(adapter, units, originals):
+    """Per i testi riscritti sul posto (Description, content.json) la sorgente è l'originale della mod,
+    non il testo trovato sul disco, che può essere una nostra traduzione (anche di un'altra lingua)."""
     for u in units:
-        prev = project.unit(u.key)
-        if prev and prev["dst"] and prev["dst"] != prev["src"] and u.source == prev["dst"]:
-            u.source = prev["src"]
+        if u.file in adapter.inplace_files:
+            u.source = originals.resolve(u.key, u.source)
+
+
+def _record_written(adapter, units, mapping, originals):
+    for u in units:
+        if u.file in adapter.inplace_files and u.key in mapping:
+            originals.record(u.key, mapping[u.key])
 
 
 def run(mod_dir, cfg, dry_run=False, log=print):
@@ -97,7 +103,8 @@ def run(mod_dir, cfg, dry_run=False, log=print):
     repairer = RepairAgent(make_engine(cfg["repair"]) if "repair" in cfg else t_eng, preset, target_name)
 
     units = adapter.extract()
-    _recover_original_sources(units, project)
+    originals = Originals(workdir, game, adapter.mod_id)
+    _resolve_inplace_sources(adapter, units, originals)
     project.prune({u.key for u in units} | project.foreign)
     todo, reused = [], 0
     for u in units:
@@ -118,32 +125,62 @@ def run(mod_dir, cfg, dry_run=False, log=print):
 
     translated = translator.translate(todo) if todo else {}
     stats = {}
-    for u in todo:
-        tr = translated.get(u.key)
-        if tr is None:
-            project.set_unit(u.key, u.source, "", "BLOCK", gh, [{"type": "engine", "detail": "nessuna traduzione"}])
-            stats["BLOCK"] = stats.get("BLOCK", 0) + 1; continue
-        
-        attempts, issues = 0, []
-        while True:
-            a = judge_a.evaluate(u, tr)
-            # B si consulta solo se A non ha già respinto la stringa
-            b = judge_b.evaluate(u, tr) if (judge_b and a.ok) else None
-            decision = aggregate(a, b)
-            issues = a.issues + (b.issues if b else [])
+    engine_fails, aborted = 0, False        # errori consecutivi dei motori di controllo (giudici / repair)
+    try:
+        for u in todo:
+            if aborted:
+                project.set_unit(u.key, u.source, "", "BLOCK", gh, [{"type": "engine_error", "detail": ENGINE_RETRY_NOTE}])
+                stats["BLOCK"] = stats.get("BLOCK", 0) + 1; continue
+            tr = translated.get(u.key)
+            if tr is None:
+                project.set_unit(u.key, u.source, "", "BLOCK", gh, [{"type": "engine", "detail": "nessuna traduzione"}])
+                stats["BLOCK"] = stats.get("BLOCK", 0) + 1; continue
 
-            if decision == Decision.REPAIR and attempts < MAX_REPAIRS:
-                tr, attempts = repairer.repair(u, tr, issues), attempts + 1
-                continue
-            if decision == Decision.REPAIR:
-                decision = Decision.BLOCK if a.hard else Decision.REVISION
-            break
+            attempts, issues, engine_error = 0, [], None
+            while True:
+                try:
+                    a = judge_a.evaluate(u, tr)
+                    # B si consulta solo se A non ha già respinto la stringa
+                    b = judge_b.evaluate(u, tr) if (judge_b and a.ok) else None
+                except Exception as e:         # rete, timeout, JSON non valido del giudice
+                    engine_error = f"giudice: {e}"; break
+                decision = aggregate(a, b)
+                issues = a.issues + (b.issues if b else [])
 
-        final = unmask(tr, u.tokens)
-        project.set_unit(u.key, u.source, final, decision.value, gh, issues, attempts)
-        if decision.value in GOOD and not dry_run:
-            tm.put(game, u.source, tmk, final)
-        stats[decision.value] = stats.get(decision.value, 0) + 1
+                if decision == Decision.REPAIR and attempts < MAX_REPAIRS:
+                    try:
+                        tr, attempts = repairer.repair(u, tr, issues), attempts + 1
+                    except Exception as e:
+                        engine_error = f"repair: {e}"; break
+                    continue
+                if decision == Decision.REPAIR:
+                    decision = Decision.BLOCK if a.hard else Decision.REVISION
+                break
+
+            if engine_error:
+                # Non verificata: resta in inglese (BLOCK) e verrà ritentata al prossimo avvio.
+                decision = Decision.BLOCK
+                issues = issues + [{"type": "engine_error", "detail": f"{engine_error[:200]} {ENGINE_RETRY_NOTE}"}]
+                engine_fails += 1
+                if engine_fails >= MAX_ENGINE_FAILS:
+                    aborted = True
+                    log(f"! {MAX_ENGINE_FAILS} errori di fila dal motore di controllo ({engine_error[:120]}): "
+                        "interrompo i controlli. Le stringhe rimaste verranno ritentate al prossimo avvio.")
+            else:
+                engine_fails = 0
+
+            final = unmask(tr, u.tokens)
+            project.set_unit(u.key, u.source, final, decision.value, gh, issues, attempts)
+            if decision.value in GOOD and not dry_run:
+                tm.put(game, u.source, tmk, final)
+            stats[decision.value] = stats.get(decision.value, 0) + 1
+    except BaseException:
+        if not dry_run:                        # un errore imprevisto non deve far perdere i risultati già ottenuti
+            try:
+                project.save(); originals.save()
+            except Exception:
+                pass
+        raise
 
     mapping = _build_mapping(units, project, existing)
     review = project.review_queue()
@@ -151,6 +188,8 @@ def run(mod_dir, cfg, dry_run=False, log=print):
         project.save_review()
         project.backup(mod_dir, adapter.output_files())
         adapter.write(mapping)
+        _record_written(adapter, units, mapping, originals)
+        originals.save()
         project.save(glossary_hash=gh, translator=t_eng.name,
                      judges={"A": ja_eng.name if ja_eng else "deterministic", "B": jb_eng.name if jb_eng else "skipped"})
     log(f"Esito: {stats or 'nulla da fare'} | in revisione/nota: {len(review)} | "
@@ -205,5 +244,8 @@ def apply_review(mod_dir, cfg, edits):
         project.save_review()
         project.backup(mod_dir, adapter.output_files())
         adapter.write(mapping)
+        originals = Originals(workdir, game, adapter.mod_id)
+        _record_written(adapter, units, mapping, originals)
+        originals.save()
         project.save()
     return done

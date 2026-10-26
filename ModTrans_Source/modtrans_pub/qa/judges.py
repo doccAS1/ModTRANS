@@ -1,4 +1,5 @@
 import json, re
+from collections import Counter
 
 from ..core.masking import mask, strip_tokens, token_ids
 from ..core.models import Verdict
@@ -6,6 +7,20 @@ from ..engines.base import extract_json
 from ..translator import preset_block
 
 NUM = re.compile(r"\d+")
+# separatore delle migliaia (1,000 / 1.000 / 1 000 con spazio non separabile) -> 1000
+THOUSANDS = re.compile(r"(?<=\d)[,.\u00a0\u202f](?=\d{3}(?!\d))")
+# numeri scritti a lettere nell'originale: la traduzione può legittimamente usare le cifre
+SPELLED = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+           "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+           "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+           "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100,
+           "thousand": 1000, "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6,
+           "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10}
+SPELLED_RX = re.compile(r"\b(" + "|".join(sorted(SPELLED, key=len, reverse=True)) + r")\b", re.I)
+
+
+def numbers(text):
+    return Counter(NUM.findall(THOUSANDS.sub("", strip_tokens(text))))
 
 
 class JudgeA:
@@ -20,8 +35,17 @@ class JudgeA:
         if token_ids(unit.masked) != token_ids(tr):
             issues.append({"type": "placeholder",
                            "detail": f"segnaposto attesi {token_ids(unit.masked)}, trovati {token_ids(tr)}"})
-        if sorted(NUM.findall(strip_tokens(unit.masked))) != sorted(NUM.findall(strip_tokens(tr))):
-            issues.append({"type": "number", "detail": "numeri diversi dall'originale"})
+        src_n, tr_n = numbers(unit.masked), numbers(tr)
+        spelled = Counter(str(SPELLED[w.lower()]) for w in SPELLED_RX.findall(strip_tokens(unit.masked)))
+        invented = tr_n - src_n - spelled      # cifre nella traduzione che l'originale non spiega: numero cambiato
+        missing = src_n - tr_n                 # cifre dell'originale assenti: spesso scritte a lettere (1st -> primo)
+        if invented:
+            issues.append({"type": "number",
+                           "detail": f"numeri che non sono nell'originale: {sorted(invented.elements())}"})
+        elif missing:
+            issues.append({"type": "number_missing",
+                           "detail": f"numeri dell'originale assenti nella traduzione: {sorted(missing.elements())}; "
+                                     "riporta le cifre come nell'originale"})
         # Nella sorgente i codici di gioco sono stati mascherati: nella traduzione non devono
         # ricomparirne di "grezzi" (un testo ostile può spingere l'LLM a inserirne di nuovi).
         stray = mask(strip_tokens(tr))[1]
