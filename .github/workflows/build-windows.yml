@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build ModTrans.exe
-        run: pyinstaller --noconfirm --clean --distpath dist --workpath build ModTrans_Source/modtrans.spec
+        run: python -m PyInstaller --noconfirm --clean --distpath dist --workpath build ModTrans_Source/modtrans.spec
 
       # The tests import the package as "modtrans"; in this repo the folder is "modtrans_pub".
       # Informational: a failure here is shown but does not block the build.
