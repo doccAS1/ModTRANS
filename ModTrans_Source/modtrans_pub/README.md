@@ -163,8 +163,16 @@ example file were valid when it was written.
 3. Translates the rest in batches, using the game preset (tone, characters) and the glossary.
 4. Judge A and Judge B score each string → decision `PUBLISH`, `PUBLISH_WITH_NOTE`, `REPAIR`, `REVISION` (human), or `BLOCK`.
 5. Rejected strings go through up to 2 repair attempts.
+   Digits are compared with the original (thousands separators like `1,000` / `1.000` are ignored, and numbers spelled
+   out in the source such as `three` may become `3`). A **changed or invented** number is a hard error; a number that is
+   merely **missing** (e.g. `1st` written as `primo`) goes to repair and then to human review, never straight to `BLOCK`.
+   If a judge or the repair step can't be reached (network error, invalid reply), that string is left in the original language
+   and retried on the next run; after 3 failures in a row the checks stop and everything is saved, so no work is lost.
 6. Backs up the previous state, then writes `i18n/<lang>.json` (and the translated `Description` in `manifest.json`;
    `content.json` for mods without i18n). `BLOCK`ed strings are left out, so the game shows the English text for them.
+
+The original text of anything the tool rewrites in place (the manifest `Description`, `content.json`) is remembered **per mod**, independent of the language, so switching language
+(Italian → French → Italian) always translates from the original and never from a previous translation. If the mod author publishes an update, the new text is picked up as the new original.
 
 Translation memory, manifests and backups are kept **per target language**, so translating the same mod into several languages never mixes them up.
 

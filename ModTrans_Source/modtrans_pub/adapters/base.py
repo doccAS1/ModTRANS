@@ -3,6 +3,7 @@ class Adapter:
     game = ""
     mod_id = ""
     mod_version = ""
+    inplace_files = ()                         # file della mod riscritti sul posto (la sorgente e l'output coincidono)
 
     @classmethod
     def detect(cls, mod_dir) -> bool: ...

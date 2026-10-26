@@ -294,6 +294,175 @@ def test_api_key_not_sent_over_plain_http():
     print("chiave/https ok")
 
 
+# ---------------------------------------------------------------- fix gravi (1.1, 1.2, 2.1)
+class RecLang(MockEngine):
+    """Traduttore che marca la lingua e registra i testi che riceve."""
+    seen = []
+
+    def chat(self, system, user):
+        if "ROLE: translator" in system:
+            tag = "FR" if "French" in system else "IT"
+            items = json.loads(user)["items"]
+            for v in items.values():
+                RecLang.seen.append((tag, v["key"], v["text"]))
+            return json.dumps({i: f"[{tag}] " + v["text"] for i, v in items.items()}, ensure_ascii=False)
+        return super().chat(system, user)
+
+
+def _lang_run(p, d, w, code, name):
+    return p.run(d, {"workdir": str(w), "translator": {"type": "mock"},
+                     "target_lang_code": code, "target_lang_name": name}, log=lambda *_: None)
+
+
+def _with_engine(p, factory):
+    orig = p.make_engine
+    p.make_engine = factory
+    return orig
+
+
+def test_languages_never_stack_on_inplace_text():
+    """1.1: it -> fr -> it non deve partire da testi già tradotti (Description e content.json)."""
+    import modtrans.pipeline as p
+    orig = _with_engine(p, lambda c: RecLang())
+    try:
+        d1 = _mod(tempfile.mkdtemp())
+        (d1 / "manifest.json").write_text('{"UniqueID":"A.B","Version":"1","Description":"A test mod"}')
+        d2 = Path(tempfile.mkdtemp()); (d2 / "manifest.json").write_text('{"UniqueID":"C.D","Version":"1"}')
+        (d2 / "content.json").write_text('{"Changes":[{"Action":"EditData","Target":"X","Text":"Hello farmer"}]}')
+        for d, read, orig_text in [(d1, lambda d: json.load(open(d / "manifest.json"))["Description"], "A test mod"),
+                                   (d2, lambda d: json.load(open(d / "content.json"))["Changes"][0]["Text"], "Hello farmer")]:
+            w = Path(tempfile.mkdtemp()); RecLang.seen.clear()
+            _lang_run(p, d, w, "it", "Italian"); _lang_run(p, d, w, "fr", "French"); _lang_run(p, d, w, "it", "Italian")
+            sources = [txt for _, k, txt in RecLang.seen if "Description" in k or "Text" in k]
+            assert sources == [orig_text, orig_text], sources          # il run it finale è riusato, non ritradotto
+            assert read(d) == f"[IT] {orig_text}", read(d)              # e sul disco c'è di nuovo l'italiano
+            _lang_run(p, d, w, "fr", "French")
+            assert read(d) == f"[FR] {orig_text}", read(d)
+    finally:
+        p.make_engine = orig
+    print("lingue non si impilano ok")
+
+
+def test_originals_migration_and_author_update():
+    """1.1: dati di versioni senza registro (migrazione) e mod aggiornata dall'autore."""
+    import modtrans.pipeline as p
+    orig = _with_engine(p, lambda c: RecLang())
+    try:
+        d = _mod(tempfile.mkdtemp())
+        (d / "manifest.json").write_text('{"UniqueID":"A.B","Version":"1","Description":"A test mod"}')
+        w = Path(tempfile.mkdtemp())
+        _lang_run(p, d, w, "it", "Italian")
+        for f in w.rglob("originals.json"):
+            f.unlink()                                                   # come una versione precedente del tool
+        RecLang.seen.clear()
+        _lang_run(p, d, w, "fr", "French")
+        assert [t for _, k, t in RecLang.seen if "Description" in k] == ["A test mod"], RecLang.seen
+        # l'autore pubblica una nuova versione: il testo sul disco non è né l'originale né una nostra traduzione
+        (d / "manifest.json").write_text('{"UniqueID":"A.B","Version":"2","Description":"Brand new text"}')
+        RecLang.seen.clear()
+        _lang_run(p, d, w, "it", "Italian")
+        assert [t for _, k, t in RecLang.seen if "Description" in k] == ["Brand new text"], RecLang.seen
+        assert json.load(open(d / "manifest.json"))["Description"] == "[IT] Brand new text"
+    finally:
+        p.make_engine = orig
+    print("migrazione/aggiornamento autore ok")
+
+
+class FailJudge(MockEngine):
+    """Giudice che fallisce (rete / JSON non valido) alle chiamate indicate."""
+    def __init__(self, fail_on=None, exc=RuntimeError("HTTP 503 (simulato)")):
+        self.n, self.fail_on, self.exc = 0, fail_on, exc
+
+    def chat(self, system, user):
+        if "ROLE: judge" in system:
+            self.n += 1
+            if self.fail_on is None or self.n in self.fail_on:
+                raise self.exc
+        return super().chat(system, user)
+
+
+def _four_strings():
+    d = _mod(tempfile.mkdtemp())
+    (d / "i18n" / "default.json").write_text('{"a":"One","b":"Two","c":"Three","d":"Four"}')
+    return d
+
+
+def test_judge_and_repair_errors_do_not_crash_the_run():
+    """1.2: un errore di rete / JSON malformato nei giudici o nel repair non deve interrompere il run."""
+    import modtrans.pipeline as p
+    # a) un solo errore: la stringa resta in inglese (BLOCK) e viene ritentata al run successivo
+    d = _four_strings(); w = d / "w"; judge = FailJudge({2})
+    orig = _with_engine(p, lambda c: judge if c.get("tag") == "j" else MockEngine())
+    cfg = {"workdir": str(w), "translator": {"type": "mock"}, "judge_a": {"type": "mock", "tag": "j"}}
+    try:
+        r = p.run(d, cfg, log=lambda *_: None)
+        assert r["stats"] == {"PUBLISH": 3, "BLOCK": 1}, r["stats"]
+        assert len(json.load(open(d / "i18n" / "it.json"))) == 3
+        assert any(m for m in w.rglob("manifest.json")), "il manifest deve essere salvato"
+        blocked = [v for v in r["review"].values() if v["decision"] == "BLOCK"][0]
+        assert blocked["issues"][-1]["type"] == "engine_error"
+        p.make_engine = lambda c: MockEngine()                           # il motore torna disponibile
+        r2 = p.run(d, cfg, log=lambda *_: None)
+        assert r2["stats"] == {"PUBLISH": 1} and len(json.load(open(d / "i18n" / "it.json"))) == 4, r2
+        # b) motore non raggiungibile: dopo 3 errori di fila si interrompe, senza crash, e salva
+        d = _four_strings(); w = d / "w"; logs = []
+        d2 = d / "i18n" / "default.json"; d2.write_text('{"a":"One","b":"Two","c":"Three","d":"Four","e":"Five"}')
+        p.make_engine = lambda c: FailJudge(None) if c.get("tag") == "j" else MockEngine()
+        cfg = {"workdir": str(w), "translator": {"type": "mock"}, "judge_a": {"type": "mock", "tag": "j"}}
+        r = p.run(d, cfg, log=logs.append)
+        assert r["stats"] == {"BLOCK": 5}, r["stats"]
+        assert any("interrompo" in l for l in logs), logs
+        assert any(m for m in w.rglob("manifest.json"))
+        # c) il repair fallisce
+        d = _mod(tempfile.mkdtemp()); (d / "i18n" / "default.json").write_text('{"a":"Hi @, take {{Item}} now"}')
+
+        class FailRepair(Saboteur):
+            def chat(self, system, user):
+                if "ROLE: repair" in system:
+                    raise ValueError("JSON non valido (simulato)")
+                return super().chat(system, user)
+        p.make_engine = lambda c: FailRepair()
+        r = p.run(d, {"workdir": str(d / "w"), "translator": {"type": "mock"}}, log=lambda *_: None)
+        assert r["stats"] == {"BLOCK": 1}, r["stats"]
+        # d) errore imprevisto (non Exception): i risultati già ottenuti non vanno persi
+        d = _four_strings(); w = d / "w"
+        p.make_engine = lambda c: FailJudge({2}, KeyboardInterrupt()) if c.get("tag") == "j" else MockEngine()
+        cfg = {"workdir": str(w), "translator": {"type": "mock"}, "judge_a": {"type": "mock", "tag": "j"}}
+        try:
+            p.run(d, cfg, log=lambda *_: None); raise AssertionError("doveva interrompersi")
+        except KeyboardInterrupt:
+            pass
+        man = json.load(open(next(w.rglob("manifest.json"))))
+        assert len(man["units"]) == 1, man["units"].keys()               # la prima stringa è salva
+    finally:
+        p.make_engine = orig
+    print("errori giudici/repair ok")
+
+
+def test_number_check_no_blocking_false_positives():
+    """2.1: separatori delle migliaia, numeri scritti a lettere; i numeri CAMBIATI restano un errore grave."""
+    from modtrans.core.glossary import Glossary
+    from modtrans.core.masking import mask
+    from modtrans.core.models import Unit
+    from modtrans.qa.judges import JudgeA
+
+    def check(src, tr):
+        u = Unit("k", src); u.masked, u.tokens = mask(src)
+        v = JudgeA(Glossary(), None).evaluate(u, tr)
+        return [i["type"] for i in v.issues], v.hard
+    assert check("You have 1,000g", "Hai 1.000g") == ([], False)
+    assert check("You have 1,000g", "Hai 1000g") == ([], False)
+    assert check("You have 1,000,000g", "Hai 1.000.000g") == ([], False)
+    assert check("three apples", "3 mele") == ([], False)
+    assert check("Day 2", "Giorno 2") == ([], False)
+    assert check("the 1st of spring", "il primo di primavera") == (["number_missing"], False)
+    assert check("3 apples", "tre mele") == (["number_missing"], False)
+    assert check("You have 50 gold", "Hai oro") == (["number_missing"], False)
+    assert check("Costs 100g", "Costa 10g") == (["number"], True)          # numero cambiato: grave
+    assert check("Costs 100g", "Costa 100g e 7 monete") == (["number"], True)   # numero inventato: grave
+    print("controllo numeri ok")
+
+
 if __name__ == "__main__":
     test_mask_roundtrip(); test_repair_loop(); test_one_or_two_judges(); test_aggregate_missing_judges()
     test_rerun_does_not_retranslate_own_output(); test_languages_are_isolated(); test_tm_migration()
@@ -302,4 +471,6 @@ if __name__ == "__main__":
     test_language_code_cannot_traverse(); test_review_cli_makes_no_ai_calls_and_dry_run_writes_nothing()
     test_lenient_json_comments_before_closing_bracket(); test_safe_extract_zip()
     test_mask_literal_placeholder_roundtrip(); test_api_key_not_sent_over_plain_http()
+    test_languages_never_stack_on_inplace_text(); test_originals_migration_and_author_update()
+    test_judge_and_repair_errors_do_not_crash_the_run(); test_number_check_no_blocking_false_positives()
     print("tests ok")
