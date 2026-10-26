@@ -115,8 +115,9 @@ If you just want to use it, no Python needed: download `ModTrans-windows.zip` fr
 [Releases](../../releases) page, unzip it, and run `ModTrans.exe`. Next to it you'll find `config.toml`
 (edit it to choose your AI provider), and the app creates it for you if it's missing.
 
-You still need an API key for the AI provider you choose (or a local model). With the default config, set
-`OPENROUTER_API_KEY` as described in the [user guide](ModTrans_Source/modtrans_pub/README.md#setting-your-api-key-cloud-engines).
+You still need an API key for the AI provider you choose (or a local model). Paste it into the **API key** field of the
+window (it is never written to the config), or set the environment variable named in `config.toml` as described in the
+[user guide](ModTrans_Source/modtrans_pub/README.md#setting-your-api-key-cloud-engines).
 
 > **Antivirus warning:** executables built with PyInstaller are sometimes flagged by Windows
 > Defender or other antivirus software as a false positive. The program is fully open source: you can read the

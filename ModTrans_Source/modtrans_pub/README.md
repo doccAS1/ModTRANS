@@ -95,6 +95,10 @@ miss its own mistakes. Judges can be cheaper/smaller models because their job is
    - **Windows, current session only:** `$env:ANTHROPIC_API_KEY = "your-key"`
    - **macOS / Linux:** `export ANTHROPIC_API_KEY="your-key"` (add it to `~/.bashrc` / `~/.zshrc` to keep it)
 
+   **In the GUI** you can skip this step: paste the key into the **API key** field. It is used for the variable named in the
+   `[translator]` section (`api_key_env`) for that run only and is never written to the config or the log. Tick **Remember**
+   to keep it between sessions: it is then stored *unencrypted* in your user folder (`.modtrans_gui.json`), so leave it off on shared computers.
+
 3. If you use a different provider, pick any variable name (e.g. `OPENAI_API_KEY`) and write the same name in `api_key_env`.
 
 ### Setting up a local model (free, private)
