@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from .adapters.stardew import ADAPTERS
+from .core.fsutil import valid_lang
 from .core.glossary import Glossary
 from .core.masking import mask, strip_tokens, unmask
 from .core.memory import TranslationMemory
@@ -16,6 +17,13 @@ from .translator import Translator
 PKG = Path(__file__).parent
 GOOD = {"PUBLISH", "PUBLISH_WITH_NOTE"}
 MAX_REPAIRS = 2
+
+def _lang(cfg):
+    try:
+        return valid_lang(cfg.get("target_lang_code", "it"))
+    except ValueError as e:
+        raise SystemExit(str(e))
+
 
 def pick_adapter(mod_dir, game, target_code="it"):
     cls = ADAPTERS[game]
@@ -50,7 +58,7 @@ def run(mod_dir, cfg, dry_run=False, log=print):
     workdir = Path(cfg.get("workdir", "~/.modtrans")).expanduser()
     
     # 1. Recupera le lingue passate dalla GUI
-    target_code = cfg.get("target_lang_code", "it")
+    target_code = _lang(cfg)
     target_name = cfg.get("target_lang_name", "Italian")
     source_name = cfg.get("source_lang_name", "Auto")
     
@@ -133,13 +141,14 @@ def run(mod_dir, cfg, dry_run=False, log=print):
 
         final = unmask(tr, u.tokens)
         project.set_unit(u.key, u.source, final, decision.value, gh, issues, attempts)
-        if decision.value in GOOD:
+        if decision.value in GOOD and not dry_run:
             tm.put(game, u.source, tmk, final)
         stats[decision.value] = stats.get(decision.value, 0) + 1
 
     mapping = _build_mapping(units, project, existing)
-    review = project.save_review()
+    review = project.review_queue()
     if not dry_run:
+        project.save_review()
         project.backup(mod_dir, adapter.output_files())
         adapter.write(mapping)
         project.save(glossary_hash=gh, translator=t_eng.name,
@@ -150,7 +159,7 @@ def run(mod_dir, cfg, dry_run=False, log=print):
 
 def restore(mod_dir, cfg):
     game = cfg.get("game", "stardew")
-    target_code = cfg.get("target_lang_code", "it")
+    target_code = _lang(cfg)
     adapter = pick_adapter(mod_dir, game, target_code)
     workdir = Path(cfg.get("workdir", "~/.modtrans")).expanduser()
     p = Project(workdir, game, adapter.mod_id, adapter.mod_version, (), target_code)
@@ -159,9 +168,9 @@ def restore(mod_dir, cfg):
 
 def _open_project(mod_dir, cfg):
     game = cfg.get("game", "stardew")
-    adapter = pick_adapter(mod_dir, game, cfg.get("target_lang_code", "it"))
+    code = _lang(cfg)
+    adapter = pick_adapter(mod_dir, game, code)
     workdir = Path(cfg.get("workdir", "~/.modtrans")).expanduser()
-    code = cfg.get("target_lang_code", "it")
     project = Project(workdir, game, adapter.mod_id, adapter.mod_version, adapter.read_output().keys(), code)
     return game, adapter, workdir, project
 
@@ -181,7 +190,7 @@ def apply_review(mod_dir, cfg, edits):
     game, adapter, workdir, project = _open_project(mod_dir, cfg)
     gh = Glossary.load(PKG / "presets" / f"{game}_glossary.json").hash()
     tm = TranslationMemory(workdir / "tm.sqlite")
-    tmk = f"{gh}.{cfg.get('target_lang_code', 'it')}"
+    tmk = f"{gh}.{_lang(cfg)}"
     done = 0
     for key, text in edits.items():
         cur = project.unit(key)

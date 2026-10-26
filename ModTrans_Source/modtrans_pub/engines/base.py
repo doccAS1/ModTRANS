@@ -1,5 +1,5 @@
 """Motori LLM intercambiabili: cloud (Anthropic), qualsiasi endpoint OpenAI-compatibile (Ollama, LM Studio, llama.cpp, vLLM, OpenAI, OpenRouter...) e un mock per i test. Solo stdlib."""
-import json, os, re, time, urllib.error, urllib.request
+import ipaddress, json, os, re, time, urllib.error, urllib.parse, urllib.request
 
 class Engine:
     name = "engine"
@@ -23,6 +23,17 @@ def _post(url, headers, payload, timeout=30, retries=2):
                 continue
             raise RuntimeError(f"Connessione fallita o troppo lenta: {e}")
 
+def _is_local_host(host):
+    host = (host or "").lower()
+    if host == "localhost" or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_loopback or ip.is_private
+    except ValueError:
+        return False
+
+
 class AnthropicEngine(Engine):
     def __init__(self, model, api_key_env="ANTHROPIC_API_KEY", max_tokens=4096, **_):
         self.model, self.max_tokens = model, max_tokens
@@ -44,6 +55,11 @@ class OpenAICompatEngine(Engine):
                  max_tokens=4096, temperature=0.2, **_):
         self.model, self.base, self.max_tokens, self.temp = model, base_url.rstrip("/"), max_tokens, temperature
         self.key = os.environ.get(api_key_env, "") if api_key_env else ""
+        if self.key and self.base.startswith("http://"):
+            host = urllib.parse.urlparse(self.base).hostname
+            if not _is_local_host(host):
+                raise ValueError(f"Refusing to send the API key over unencrypted HTTP to '{host}'. "
+                                 "Use an https:// base_url (plain http is only allowed for local/LAN servers).")
         self.name = f"openai_compat:{model}"
 
     def chat(self, system, user):

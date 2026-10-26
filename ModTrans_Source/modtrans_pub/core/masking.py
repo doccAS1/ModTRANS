@@ -2,6 +2,7 @@
 import re
 
 PATTERNS = [
+    r"⟦\d+⟧",                       # un ⟦N⟧ già presente nel testo originale: va protetto come un codice
     r"\{\{[^{}]*\}\}",               # token Content Patcher {{Token}}
     r"\{\d+\}",                      # {0} stile format
     r"#\$[a-z]+(?:\s[^#]*)?#",       # #$b#  #$e#  #$c 0.5#
@@ -26,9 +27,11 @@ def mask(text):
 
 
 def unmask(text, tokens):
-    for i, t in enumerate(tokens, 1):
-        text = text.replace(f"⟦{i}⟧", t)
-    return text
+    """Un solo passaggio: un token che contiene a sua volta un ⟦N⟧ non viene espanso due volte."""
+    def sub(m):
+        i = int(m.group(0)[1:-1])
+        return tokens[i - 1] if 1 <= i <= len(tokens) else m.group(0)
+    return TOKEN_RX.sub(sub, text)
 
 
 def token_ids(text):

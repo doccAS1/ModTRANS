@@ -1,8 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
+import queue
 import json
-import zipfile
 import shutil
 from pathlib import Path
 
@@ -12,6 +12,7 @@ except ImportError:
     import tomli as tomllib
 
 from . import pipeline
+from .core.fsutil import safe_extract_zip
 from .core.masking import mask
 
 class ReviewWindow(tk.Toplevel):
@@ -151,7 +152,9 @@ class ModTransGUI(tk.Tk):
                 pass
                 
         self.config_path = tk.StringVar(value=last_config)
+        self._ui_queue = queue.Queue()      # i thread di lavoro non toccano mai i widget: passano da qui
         self._build_ui()
+        self.after(100, self._drain_ui_queue)
 
     def _build_ui(self):
         top_frame = ttk.Frame(self, padding=10)
@@ -208,11 +211,29 @@ class ModTransGUI(tk.Tk):
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.configure(yscrollcommand=scroll.set)
 
-    def log(self, message):
+    def _write_log(self, message):
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
+
+    def _ui(self, fn):
+        """Esegue fn nel thread principale (Tkinter non è thread-safe)."""
+        if threading.current_thread() is threading.main_thread():
+            fn()
+        else:
+            self._ui_queue.put(fn)
+
+    def log(self, message):
+        self._ui(lambda: self._write_log(message))
+
+    def _drain_ui_queue(self):
+        try:
+            while True:
+                self._ui_queue.get_nowait()()
+        except queue.Empty:
+            pass
+        self.after(100, self._drain_ui_queue)
 
     def browse_mod(self):
         if d := filedialog.askdirectory(title="Select the mod folder"): self.mod_dir.set(d)
@@ -233,13 +254,7 @@ class ModTransGUI(tk.Tk):
                 if not messagebox.askyesno("Folder exists",
                                            f"'{dest.name}' already exists. Extract over it (files may be overwritten)?"):
                     return
-            dest.mkdir(parents=True, exist_ok=True)
-            root = dest.resolve()
-            with zipfile.ZipFile(zpath) as z:
-                for name in z.namelist():           # protezione zip-slip
-                    if not (root / name).resolve().is_relative_to(root):
-                        raise ValueError(f"unsafe path in archive: {name}")
-                z.extractall(dest)
+            safe_extract_zip(zpath, dest)       # rifiuta percorsi ostili e zip bomb
             manifests = sorted(dest.rglob("manifest.json"), key=lambda p: len(p.parts))
             if not manifests:
                 raise FileNotFoundError("no manifest.json found inside the archive (is it a SMAPI mod?)")
@@ -295,9 +310,10 @@ class ModTransGUI(tk.Tk):
 
         self.btn_translate.state(['disabled'])
         self.log(f"\n--- Starting translation for: {Path(mod).name} ---")
-        threading.Thread(target=self._run_pipeline, args=(mod, cfg), daemon=True).start()
+        export_dir = self.mods_folder.get().strip()      # letto qui, nel thread principale
+        threading.Thread(target=self._run_pipeline, args=(mod, cfg, export_dir), daemon=True).start()
 
-    def _run_pipeline(self, mod_dir, cfg):
+    def _run_pipeline(self, mod_dir, cfg, export_dir=""):
         try:
             result = pipeline.run(mod_dir, cfg, dry_run=False, log=self.log)
             if result is None:
@@ -305,15 +321,14 @@ class ModTransGUI(tk.Tk):
                 self.log("Nothing was translated, so nothing was deployed.")
                 return
             self.log("Translation completed.")
-            self._deploy(Path(mod_dir))
+            self._deploy(Path(mod_dir), export_dir)
         except (Exception, SystemExit) as e:
             self.log(f"CRITICAL ERROR: {str(e)}")
         finally:
-            self.btn_translate.state(['!disabled'])
+            self._ui(lambda: self.btn_translate.state(['!disabled']))
 
-    def _deploy(self, src_path):
+    def _deploy(self, src_path, export_dir):
         """Copia la mod tradotta nella cartella Mods. Unisce i file senza cancellare nulla."""
-        export_dir = self.mods_folder.get().strip()
         if not export_dir or not Path(export_dir).exists():
             return
         dest_path = Path(export_dir) / src_path.name
