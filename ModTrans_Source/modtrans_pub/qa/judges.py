@@ -1,6 +1,6 @@
 import json, re
 
-from ..core.masking import strip_tokens, token_ids
+from ..core.masking import mask, strip_tokens, token_ids
 from ..core.models import Verdict
 from ..engines.base import extract_json
 from ..translator import preset_block
@@ -22,6 +22,12 @@ class JudgeA:
                            "detail": f"segnaposto attesi {token_ids(unit.masked)}, trovati {token_ids(tr)}"})
         if sorted(NUM.findall(strip_tokens(unit.masked))) != sorted(NUM.findall(strip_tokens(tr))):
             issues.append({"type": "number", "detail": "numeri diversi dall'originale"})
+        # Nella sorgente i codici di gioco sono stati mascherati: nella traduzione non devono
+        # ricomparirne di "grezzi" (un testo ostile può spingere l'LLM a inserirne di nuovi).
+        stray = mask(strip_tokens(tr))[1]
+        if stray:
+            issues.append({"type": "injected_code",
+                           "detail": f"codici di gioco non presenti nell'originale: {stray[:5]}"})
         issues += self.glossary.check(unit.source, tr)
         if len(tr) > 2.3 * len(unit.masked) + 15:
             issues.append({"type": "length", "detail": "traduzione molto più lunga dell'originale"})
@@ -30,7 +36,7 @@ class JudgeA:
     def evaluate(self, unit, tr):
         det = self.deterministic(unit, tr)
         if det:
-            return Verdict("A", False, 0.0, det, hard=any(i["type"] in ("placeholder", "number", "empty") for i in det))
+            return Verdict("A", False, 0.0, det, hard=any(i["type"] in ("placeholder", "number", "empty", "injected_code") for i in det))
         if not self.engine:
             return Verdict("A", True, 1.0)
         system = (f"# ROLE: judge\nSei il Giudice A (ACCURATEZZA) per traduzioni di mod verso {self.target_lang}. Valuti SOLO fedeltà di significato: "

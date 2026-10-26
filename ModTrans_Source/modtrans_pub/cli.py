@@ -17,8 +17,7 @@ def main(argv=None):
     elif a.command == "restore":
         print("Ripristinato." if pipeline.restore(a.mod_dir, cfg) else "Nessun backup disponibile.")
     else:
-        r = pipeline.run(a.mod_dir, cfg, dry_run=True, log=lambda *_: None)
-        print(json.dumps(r["review"] if r else {}, ensure_ascii=False, indent=2))
+        print(json.dumps(pipeline.load_review(a.mod_dir, cfg), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 import hashlib, json, re, shutil, time
 from pathlib import Path
 
+from .fsutil import atomic_write_text
+
 TOOL_VERSION = "0.1.0"
 
 
@@ -12,6 +14,8 @@ def sha(s):
 class Project:
     def __init__(self, workdir, game, mod_id, mod_version, existing_output_keys=(), lang="it"):
         safe = re.sub(r"[^\w.-]+", "_", mod_id)
+        if not safe.strip("."):        # "." e ".." non devono diventare percorsi
+            safe = "_"
         if lang != "it":            # "it" mantiene il percorso storico, così i backup vecchi restano validi
             safe = f"{safe}__{re.sub(r'[^\w-]+', '_', lang)}"
         self.dir = Path(workdir) / "projects" / game / safe
@@ -44,18 +48,25 @@ class Project:
 
     def save(self, **extra):
         self.m.update(extra)
-        json.dump(self.m, open(self.path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        atomic_write_text(self.path, json.dumps(self.m, ensure_ascii=False, indent=2))
+
+    def review_queue(self):
+        return {k: v for k, v in self.m["units"].items()
+                if v["decision"] in ("REVISION", "BLOCK", "PUBLISH_WITH_NOTE")}
 
     def save_review(self):
-        q = {k: v for k, v in self.m["units"].items()
-             if v["decision"] in ("REVISION", "BLOCK", "PUBLISH_WITH_NOTE")}
-        json.dump(q, open(self.dir / "review.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        q = self.review_queue()
+        atomic_write_text(self.dir / "review.json", json.dumps(q, ensure_ascii=False, indent=2))
         return q
 
     # --- backup ---
     def backup(self, mod_dir, rel_paths):
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        b = self.dir / "backups" / stamp
+        root, n = self.dir / "backups", 0
+        b = root / stamp
+        while b.exists():              # due scritture nello stesso secondo non devono sovrascriversi
+            n += 1
+            b = root / f"{stamp}-{n:03d}"
         rec = {"existing": [], "created": []}
         for rel in rel_paths:
             src = Path(mod_dir) / rel

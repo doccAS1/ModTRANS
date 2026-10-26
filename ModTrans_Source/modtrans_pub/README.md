@@ -25,8 +25,8 @@ In the GitHub repository that folder is called `modtrans_pub`: rename it to `mod
 | Command | What it does |
 |---|---|
 | `python -m modtrans translate <mod> -c config.toml` | Translate (only new/changed strings on re-runs) |
-| `python -m modtrans translate <mod> -c config.toml --dry-run` | Simulate: runs everything, writes nothing |
-| `python -m modtrans review <mod> -c config.toml` | Show strings waiting for human review |
+| `python -m modtrans translate <mod> -c config.toml --dry-run` | Simulate: runs everything, writes nothing to the mod or the translation memory |
+| `python -m modtrans review <mod> -c config.toml` | Show strings waiting for human review (from the last run; makes no AI calls) |
 | `python -m modtrans restore <mod> -c config.toml` | Roll back to the previous backup |
 
 Tests: `python -m modtrans.tests.test_core`
