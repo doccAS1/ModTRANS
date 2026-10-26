@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import os
 import threading
 import queue
 import json
@@ -147,6 +148,12 @@ def _default_config():
     return str(path)
 
 
+def _primary_key_env(cfg):
+    """Nome della variabile d'ambiente con la chiave API del traduttore (None se non ne usa)."""
+    name = (cfg.get("translator") or {}).get("api_key_env")
+    return name if isinstance(name, str) and name.strip() else None
+
+
 class ModTransGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -158,6 +165,8 @@ class ModTransGUI(tk.Tk):
         self.mods_folder = tk.StringVar()
         self.source_lang = tk.StringVar(value="Auto")
         self.target_lang = tk.StringVar(value="Italian (it)")
+        self.api_key = tk.StringVar()
+        self.remember_key = tk.BooleanVar(value=False)
         
         self.settings_file = Path.home() / ".modtrans_gui.json"
         last_config = _default_config()
@@ -168,13 +177,16 @@ class ModTransGUI(tk.Tk):
                 self.mods_folder.set(saved.get("mods_folder", ""))
                 self.source_lang.set(saved.get("source_lang", "Auto"))
                 self.target_lang.set(saved.get("target_lang", "Italian (it)"))
+                if saved.get("remember_key") and isinstance(saved.get("api_key"), str):
+                    self.remember_key.set(True)
+                    self.api_key.set(saved["api_key"])
             except:
                 pass
                 
         self.config_path = tk.StringVar(value=last_config)
         self._ui_queue = queue.Queue()      # i thread di lavoro non toccano mai i widget: passano da qui
         self._build_ui()
-        self.after(100, self._drain_ui_queue)
+        self._drain_id = self.after(100, self._drain_ui_queue)
 
     def _build_ui(self):
         top_frame = ttk.Frame(self, padding=10)
@@ -210,6 +222,17 @@ class ModTransGUI(tk.Tk):
         ttk.Label(top_frame, text="Export to 'Mods':").grid(row=3, column=0, sticky=tk.W, pady=5)
         ttk.Entry(top_frame, textvariable=self.mods_folder, width=45).grid(row=3, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
         ttk.Button(top_frame, text="Browse...", command=self.browse_mods_folder, width=10).grid(row=3, column=3, sticky=tk.W, padx=1)
+
+        # Riga 4: chiave API (mai scritta nel config; vale per questo avvio)
+        ttk.Label(top_frame, text="API key:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(top_frame, textvariable=self.api_key, show="*", width=45).grid(row=4, column=1, columnspan=2, padx=5, pady=5, sticky=tk.W)
+        ttk.Checkbutton(top_frame, text="Remember", variable=self.remember_key,
+                        command=self._save_settings).grid(row=4, column=3, sticky=tk.W, padx=1)
+        ttk.Label(top_frame, foreground="gray", wraplength=640, justify=tk.LEFT,
+                  text="Optional: used instead of the environment variable named in your config (api_key_env). "
+                       "'Remember' stores the key unencrypted in your user folder; leave it off on shared computers. "
+                       "Not needed for local models."
+                  ).grid(row=5, column=1, columnspan=3, sticky=tk.W, padx=5)
 
         # Bottoni
         btn_frame = ttk.Frame(self, padding=10)
@@ -253,7 +276,14 @@ class ModTransGUI(tk.Tk):
                 self._ui_queue.get_nowait()()
         except queue.Empty:
             pass
-        self.after(100, self._drain_ui_queue)
+        self._drain_id = self.after(100, self._drain_ui_queue)
+
+    def destroy(self):
+        try:
+            self.after_cancel(self._drain_id)       # niente callback pendenti su una finestra distrutta
+        except Exception:
+            pass
+        super().destroy()
 
     def browse_mod(self):
         if d := filedialog.askdirectory(title="Select the mod folder"): self.mod_dir.set(d)
@@ -294,9 +324,16 @@ class ModTransGUI(tk.Tk):
                 "last_config": self.config_path.get(),
                 "mods_folder": self.mods_folder.get(),
                 "source_lang": self.source_lang.get(),
-                "target_lang": self.target_lang.get()
+                "target_lang": self.target_lang.get(),
+                "remember_key": bool(self.remember_key.get()),
             }
+            if self.remember_key.get() and self.api_key.get().strip():
+                data["api_key"] = self.api_key.get().strip()
             self.settings_file.write_text(json.dumps(data), encoding="utf-8")
+            try:
+                os.chmod(self.settings_file, 0o600)      # dove il sistema lo supporta
+            except OSError:
+                pass
         except: pass
 
     def _load_config(self):
@@ -319,6 +356,19 @@ class ModTransGUI(tk.Tk):
         cfg["source_lang_name"] = self.source_lang.get()
         return cfg
 
+    def _apply_api_key(self, cfg):
+        """Imposta la chiave digitata nella variabile d'ambiente del traduttore, solo per questo processo.
+        Non viene mai applicata ad altre variabili (così non finisce a un provider diverso) né registrata nel log."""
+        key = self.api_key.get().strip()
+        if not key:
+            return
+        name = _primary_key_env(cfg)
+        if name:
+            os.environ[name] = key
+            self.log(f"API key from the field is used for {name}.")
+        else:
+            self.log("The API key field was ignored: the translator in this config doesn't use an API key.")
+
     def start_translation(self):
         mod = self.mod_dir.get()
         if not mod:
@@ -328,6 +378,8 @@ class ModTransGUI(tk.Tk):
         cfg = self._prepare_cfg()
         if not cfg: return
 
+        self._apply_api_key(cfg)
+        self._save_settings()
         self.btn_translate.state(['disabled'])
         self.log(f"\n--- Starting translation for: {Path(mod).name} ---")
         export_dir = self.mods_folder.get().strip()      # letto qui, nel thread principale
