@@ -1,0 +1,18 @@
+[project]
+name = "modtrans"
+version = "0.1.0"
+description = "Traduzione AI delle mod di Skyrim: solo testo, struttura intatta"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+anthropic = ["anthropic"]
+7z = ["py7zr"]
+
+[project.scripts]
+modtrans = "modtrans.cli:main"
+modtrans-gui = "modtrans.gui:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
