@@ -194,7 +194,15 @@ def run(mod_dir, cfg, dry_run=False, log=print):
                      judges={"A": ja_eng.name if ja_eng else "deterministic", "B": jb_eng.name if jb_eng else "skipped"})
     log(f"Esito: {stats or 'nulla da fare'} | in revisione/nota: {len(review)} | "
         f"scritte {len(mapping)}/{len(units)} chiavi" + (" (dry-run)" if dry_run else ""))
-    return {"stats": stats, "review": review, "written": len(mapping), "total": len(units)}
+    # stringhe scritte nella mod ma ancora in attesa di approvazione umana
+    unreviewed = sorted(k for k in mapping
+                        if (m := project.unit(k)) and m["decision"] == "REVISION")
+    if unreviewed:
+        log(f"⚠ ATTENZIONE: {len(unreviewed)} stringa/e sono state scritte nella mod ma i giudici non erano "
+            "sicuri: la traduzione potrebbe non essere perfetta. Controllale con Manual Review "
+            "(o `review` da riga di comando).")
+    return {"stats": stats, "review": review, "written": len(mapping), "total": len(units),
+            "unreviewed": unreviewed}
 
 def backups_left(mod_dir, cfg):
     game = cfg.get("game", "stardew")
