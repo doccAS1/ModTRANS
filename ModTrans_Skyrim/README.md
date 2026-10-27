@@ -1,11 +1,11 @@
-# modtrans
+# skyrimtrans
 
 Traduce le mod di Skyrim (LE/SE) con Claude, toccando **solo il testo**.
 
 ## Interfaccia grafica
 ```bash
 pip install -e .[anthropic,7z]
-modtrans-gui          # si apre nel browser, trascini la mod e scegli lingua e servizio AI
+skyrimtrans-gui          # si apre nel browser, trascini la mod e scegli lingua e servizio AI
 ```
 Gira solo sul tuo PC (127.0.0.1). La chiave API non viene salvata su disco. "Solo analisi" mostra quante stringhe verrebbero tradotte senza chiamare nessuna AI.
 
@@ -13,21 +13,21 @@ Gira solo sul tuo PC (127.0.0.1). La chiave API non viene salvata su disco. "Sol
 ```bash
 pip install -e .
 export ANTHROPIC_API_KEY=...
-python -m modtrans MiaMod.zip -l italian            # -> MiaMod_italian.zip
-python -m modtrans MiaMod.esp -l italian -o out.zip --glossary glossario.json
+python -m skyrimtrans MiaMod.zip -l italian            # -> MiaMod_italian.zip
+python -m skyrimtrans MiaMod.esp -l italian -o out.zip --glossary glossario.json
 ```
 
 ### Altri provider (API compatibili OpenAI, anche locali)
 Nessuna dipendenza extra. Esempi:
 ```bash
 # Ollama
-python -m modtrans MiaMod.zip -l italian --provider openai --model qwen2.5:14b \
+python -m skyrimtrans MiaMod.zip -l italian --provider openai --model qwen2.5:14b \
     --base-url http://localhost:11434/v1 --batch-items 8
 # LM Studio
-python -m modtrans MiaMod.zip -l italian --provider openai --model <nome-modello> \
+python -m skyrimtrans MiaMod.zip -l italian --provider openai --model <nome-modello> \
     --base-url http://localhost:1234/v1 --batch-items 8
 # OpenAI / OpenRouter (chiave in OPENAI_API_KEY)
-python -m modtrans MiaMod.zip -l italian --provider openai --model gpt-4o-mini
+python -m skyrimtrans MiaMod.zip -l italian --provider openai --model gpt-4o-mini
 ```
 Con modelli piccoli usa `--batch-items` basso: se perdono i segnaposto la stringa resta in originale (vedi il report).
 
@@ -36,7 +36,7 @@ Input: cartella, `.zip` o singolo `.esp/.esm/.esl`. Output: zip con la stessa st
 ## Cosa traduce
 | File | Cosa |
 |---|---|
-| `.esp/.esm/.esl` non localizzati | solo i sottorecord testuali in `modtrans/tables.py` (nomi, descrizioni, libri, dialoghi, quest, messaggi) |
+| `.esp/.esm/.esl` non localizzati | solo i sottorecord testuali in `skyrimtrans/tables.py` (nomi, descrizioni, libri, dialoghi, quest, messaggi) |
 | `*_ENGLISH.STRINGS/DLSTRINGS/ILSTRINGS` | tutte le stringhe; crea `*_<LINGUA>.*`, il plugin non cambia |
 | `Interface/Translations/*_ENGLISH.txt` (MCM) | solo il testo dopo il tab; crea `*_<LINGUA>.txt` |
 

@@ -1,4 +1,4 @@
-"""Interfaccia web locale: `modtrans-gui` (si apre nel browser, solo su 127.0.0.1)."""
+"""Interfaccia web locale: `skyrimtrans-gui` (si apre nel browser, solo su 127.0.0.1)."""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +19,7 @@ from .gui_page import PAGE
 from .pipeline import LANGS, run
 from .translator import DEFAULT_MODEL, AnthropicBackend, OpenAICompatBackend, Translator
 
-SETTINGS_FILE = Path.home() / ".modtrans.json"
+SETTINGS_FILE = Path.home() / ".skyrimtrans.json"
 SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items")  # mai la chiave API
 ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
 LANG_LABELS = {"english": "Inglese", "french": "Francese", "german": "Tedesco", "italian": "Italiano",
@@ -44,7 +44,7 @@ class Job:
 class App:
     def __init__(self):
         self.token = secrets.token_urlsafe(16)
-        self.work = Path(tempfile.mkdtemp(prefix="modtrans_"))
+        self.work = Path(tempfile.mkdtemp(prefix="skyrimtrans_"))
         self.uploads: dict[str, tuple[Path, str]] = {}
         self.jobs: dict[str, Job] = {}
 
@@ -254,13 +254,13 @@ def create_server(port: int = 0):
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="modtrans-gui", description="Interfaccia grafica (nel browser) di modtrans")
+    ap = argparse.ArgumentParser(prog="skyrimtrans-gui", description="Interfaccia grafica (nel browser) di skyrimtrans")
     ap.add_argument("--port", type=int, default=0, help="porta locale (default: libera a caso)")
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args(argv)
     httpd, app = create_server(a.port)
     url = f"http://127.0.0.1:{httpd.server_port}/"
-    print(f"modtrans è attivo su {url}\nPremi Ctrl+C per chiudere.")
+    print(f"skyrimtrans è attivo su {url}\nPremi Ctrl+C per chiudere.")
     if not a.no_browser:
         webbrowser.open(url)
     try:

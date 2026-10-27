@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_all import build_plugin  # noqa: E402
-from modtrans import gui  # noqa: E402
+from skyrimtrans import gui  # noqa: E402
 
 
 class Client:

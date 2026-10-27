@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from modtrans import plugin as pl, protect as pr  # noqa: E402
-from modtrans.pipeline import run  # noqa: E402
-from modtrans.translator import Translator  # noqa: E402
+from skyrimtrans import plugin as pl, protect as pr  # noqa: E402
+from skyrimtrans.pipeline import run  # noqa: E402
+from skyrimtrans.translator import Translator  # noqa: E402
 
 
 def sub(t, d):
@@ -115,7 +115,7 @@ def test_bad_translation_keeps_original(tmp_path):
 
 
 def test_mcm_and_strings(tmp_path):
-    from modtrans import mcm, strings_file as sf
+    from skyrimtrans import mcm, strings_file as sf
 
     mod = tmp_path / "m"
     (mod / "Interface" / "Translations").mkdir(parents=True)
@@ -140,7 +140,7 @@ def test_mcm_and_strings(tmp_path):
 
 
 def test_cli(tmp_path):
-    from modtrans.cli import main
+    from skyrimtrans.cli import main
     (tmp_path / "My.esp").write_bytes(build_plugin())
     out = tmp_path / "x.zip"
     assert main([str(tmp_path / "My.esp"), "-l", "italian", "-o", str(out)], backend=FakeBackend()) == 0
@@ -151,7 +151,7 @@ def test_openai_compatible_local_server(tmp_path):
     """Server HTTP finto che parla il protocollo OpenAI: prova il backend vero, non un mock."""
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from modtrans.cli import main
+    from skyrimtrans.cli import main
 
     seen = {}
 

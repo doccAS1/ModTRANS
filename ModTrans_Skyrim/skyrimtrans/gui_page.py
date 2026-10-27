@@ -3,7 +3,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>modtrans</title>
+<title>skyrimtrans</title>
 <style>
 :root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a65;--line:#e3e1da;--accent:#2f6f4f;--accent-ink:#fff;--bad:#a6362c;--warn:#8a6100;--ok-bg:#e8f2ec}
 @media (prefers-color-scheme:dark){:root{--bg:#161715;--card:#1f201e;--ink:#ecebe6;--mute:#9a9992;--line:#34352f;--accent:#5fb287;--accent-ink:#0e1a13;--bad:#ef7d72;--warn:#e0b24a;--ok-bg:#1f2d25}}
@@ -48,7 +48,7 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
 </head>
 <body>
 <main>
-<header><h1>modtrans</h1><p>Traduce le mod di Skyrim senza toccare la struttura: cambia solo il testo.</p></header>
+<header><h1>skyrimtrans</h1><p>Traduce le mod di Skyrim senza toccare la struttura: cambia solo il testo.</p></header>
 
 <section class="card" id="drop" tabindex="0">
   <b id="dropTitle">Trascina qui la mod</b>
