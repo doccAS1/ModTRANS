@@ -15,7 +15,7 @@ def main(argv=None):
     if a.command == "translate":
         pipeline.run(a.mod_dir, cfg, a.dry_run)
     elif a.command == "restore":
-        print("Ripristinato." if pipeline.restore(a.mod_dir, cfg) else "Nessun backup disponibile.")
+        print("Restored." if pipeline.restore(a.mod_dir, cfg) else "No backup available.")
     else:
         print(json.dumps(pipeline.load_review(a.mod_dir, cfg), ensure_ascii=False, indent=2))
 

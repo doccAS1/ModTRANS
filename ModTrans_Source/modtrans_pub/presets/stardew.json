@@ -1,19 +1,19 @@
 {
   "game": "Stardew Valley",
-  "setting": "Gioco di simulazione agricola/vita rurale, tono caldo, cozy e leggero con venature malinconiche. Ambientato a Pelican Town e dintorni (Valle Stardew).",
-  "tone": "Informale: rivolgiti al giocatore in modo diretto e familiare (usa la forma confidenziale, dove la lingua di destinazione la prevede). Frasi brevi e naturali, come in dialoghi parlati. Niente linguaggio burocratico o da traduzione letterale.",
+  "setting": "Farming / rural life simulation game with a warm, cozy and light tone with touches of melancholy. Set in Pelican Town and the surrounding Stardew Valley.",
+  "tone": "Informal: address the player directly and familiarly (use the informal form where the target language has one). Short, natural sentences, like spoken dialogue. No bureaucratic language or word-for-word translation.",
   "style_rules": [
-    "I nomi propri di personaggi e luoghi restano invariati.",
-    "Rispetta il genere grammaticale con cura: il giocatore può essere maschio o femmina, preferisci formulazioni neutre se il testo non usa ^ per distinguere.",
-    "Mantieni la lunghezza simile all'originale: le finestre di dialogo e i tooltip hanno spazio limitato.",
-    "Conserva punteggiatura espressiva, puntini di sospensione e emoticon (es. ':)' ) dei dialoghi."
+    "Proper names of characters and places stay unchanged.",
+    "Take care with grammatical gender: the player can be male or female, prefer neutral wording if the text does not use ^ to distinguish.",
+    "Keep the length close to the original: dialogue boxes and tooltips have limited space.",
+    "Keep expressive punctuation, ellipses and emoticons (e.g. ':)') in dialogue."
   ],
   "characters": {
-    "Abigail": "giovane, avventurosa, ama videogiochi e il misticismo",
-    "Sebastian": "introverso, sarcastico, ama la programmazione e la moto",
-    "Pierre": "negoziante, pratico e un po' ansioso per gli affari",
-    "Willy": "vecchio pescatore, calmo e saggio",
-    "Linus": "eremita gentile che vive in tenda",
-    "Shane": "burbero e depresso, lavora alla Joja"
+    "Abigail": "young, adventurous, loves video games and the mystical",
+    "Sebastian": "introverted, sarcastic, loves programming and motorcycles",
+    "Pierre": "shopkeeper, practical and a bit anxious about business",
+    "Willy": "old fisherman, calm and wise",
+    "Linus": "gentle hermit who lives in a tent",
+    "Shane": "gruff and depressed, works at Joja"
   }
 }

@@ -25,36 +25,36 @@ def numbers(text):
 
 class JudgeA:
     """Accuracy: controlli deterministici (veto forte) + opzionale verifica LLM di fedeltà."""
-    def __init__(self, glossary, engine=None, preset=None, target_lang="la lingua di destinazione"):
+    def __init__(self, glossary, engine=None, preset=None, target_lang="the target language"):
         self.glossary, self.engine, self.preset, self.target_lang = glossary, engine, preset, target_lang
 
     def deterministic(self, unit, tr):
         issues = []
         if not tr.strip():
-            return [{"type": "empty", "detail": "traduzione vuota"}]
+            return [{"type": "empty", "detail": "empty translation"}]
         if token_ids(unit.masked) != token_ids(tr):
             issues.append({"type": "placeholder",
-                           "detail": f"segnaposto attesi {token_ids(unit.masked)}, trovati {token_ids(tr)}"})
+                           "detail": f"expected placeholders {token_ids(unit.masked)}, found {token_ids(tr)}"})
         src_n, tr_n = numbers(unit.masked), numbers(tr)
         spelled = Counter(str(SPELLED[w.lower()]) for w in SPELLED_RX.findall(strip_tokens(unit.masked)))
         invented = tr_n - src_n - spelled      # cifre nella traduzione che l'originale non spiega: numero cambiato
         missing = src_n - tr_n                 # cifre dell'originale assenti: spesso scritte a lettere (1st -> primo)
         if invented:
             issues.append({"type": "number",
-                           "detail": f"numeri che non sono nell'originale: {sorted(invented.elements())}"})
+                           "detail": f"numbers that are not in the original: {sorted(invented.elements())}"})
         elif missing:
             issues.append({"type": "number_missing",
-                           "detail": f"numeri dell'originale assenti nella traduzione: {sorted(missing.elements())}; "
-                                     "riporta le cifre come nell'originale"})
+                           "detail": f"numbers from the original missing in the translation: {sorted(missing.elements())}; "
+                                     "keep the digits as in the original"})
         # Nella sorgente i codici di gioco sono stati mascherati: nella traduzione non devono
         # ricomparirne di "grezzi" (un testo ostile può spingere l'LLM a inserirne di nuovi).
         stray = mask(strip_tokens(tr))[1]
         if stray:
             issues.append({"type": "injected_code",
-                           "detail": f"codici di gioco non presenti nell'originale: {stray[:5]}"})
+                           "detail": f"game codes that are not in the original: {stray[:5]}"})
         issues += self.glossary.check(unit.source, tr)
         if len(tr) > 2.3 * len(unit.masked) + 15:
-            issues.append({"type": "length", "detail": "traduzione molto più lunga dell'originale"})
+            issues.append({"type": "length", "detail": "translation much longer than the original"})
         return issues
 
     def evaluate(self, unit, tr):
@@ -63,9 +63,9 @@ class JudgeA:
             return Verdict("A", False, 0.0, det, hard=any(i["type"] in ("placeholder", "number", "empty", "injected_code") for i in det))
         if not self.engine:
             return Verdict("A", True, 1.0)
-        system = (f"# ROLE: judge\nSei il Giudice A (ACCURATEZZA) per traduzioni di mod verso {self.target_lang}. Valuti SOLO fedeltà di significato: "
-                  "omissioni, aggiunte, errori di senso, termini errati. Ignora lo stile. I ⟦N⟧ sono codici di gioco, già verificati.\n"
-                  'Rispondi SOLO JSON: {"score":0-1,"ok":bool,"issues":[{"type":"meaning","detail":"...","suggestion":"..."}]}\n'
+        system = (f"# ROLE: judge\nYou are Judge A (ACCURACY) for mod translations into {self.target_lang}. Judge ONLY fidelity of meaning: "
+                  "omissions, additions, mistranslations, wrong terms. Ignore style. The ⟦N⟧ are game codes, already verified.\n"
+                  'Reply with JSON ONLY: {"score":0-1,"ok":bool,"issues":[{"type":"meaning","detail":"...","suggestion":"..."}]}\n'
                   f"{preset_block(self.preset) if self.preset else ''}")
         r = extract_json(self.engine.chat(system, json.dumps({"key": unit.key, "source": unit.masked, "translation": tr},
                                                              ensure_ascii=False)))
@@ -74,14 +74,14 @@ class JudgeA:
 
 class JudgeB:
     """Fluency: naturalezza, registro, coerenza col mondo di gioco (veto morbido)."""
-    def __init__(self, engine, preset, target_lang="la lingua di destinazione"):
+    def __init__(self, engine, preset, target_lang="the target language"):
         self.engine, self.preset, self.target_lang = engine, preset, target_lang
 
     def evaluate(self, unit, tr):
-        system = (f"# ROLE: judge\nSei il Giudice B (FLUENCY) per traduzioni di videogiochi verso {self.target_lang}. Valuti: naturalezza nella lingua di destinazione, "
-                  "registro e tono adatti al gioco e a chi parla (deducilo dalla key), adattamento culturale, genere grammaticale, "
-                  "lunghezza adatta a una UI. Non giudicare l'accuratezza tecnica. I ⟦N⟧ sono codici di gioco.\n"
-                  'Rispondi SOLO JSON: {"score":0-1,"ok":bool,"issues":[{"type":"fluency|register|culture","detail":"...","suggestion":"..."}]}\n'
+        system = (f"# ROLE: judge\nYou are Judge B (FLUENCY) for video game translations into {self.target_lang}. Judge: naturalness in the target language, "
+                  "register and tone suited to the game and the speaker (infer it from the key), cultural adaptation, grammatical gender, "
+                  "length suited to a UI. Do not judge technical accuracy. The ⟦N⟧ are game codes.\n"
+                  'Reply with JSON ONLY: {"score":0-1,"ok":bool,"issues":[{"type":"fluency|register|culture","detail":"...","suggestion":"..."}]}\n'
                   f"{preset_block(self.preset)}")
         r = extract_json(self.engine.chat(system, json.dumps({"key": unit.key, "source": unit.masked, "translation": tr},
                                                              ensure_ascii=False)))

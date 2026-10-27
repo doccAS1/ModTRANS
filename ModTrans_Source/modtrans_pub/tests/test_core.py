@@ -83,7 +83,7 @@ def test_rerun_does_not_retranslate_own_output():
     assert json.load(open(d / "manifest.json"))["Description"] == "[IT] A mod"
     lines = []
     r = p.run(d, cfg, log=lines.append)
-    assert "0 da tradurre" in lines[0], lines
+    assert "0 to translate" in lines[0], lines
     assert json.load(open(d / "manifest.json"))["Description"] == "[IT] A mod"
     assert r["stats"] == {}, r
     print("re-run ok")
@@ -411,7 +411,7 @@ def test_judge_and_repair_errors_do_not_crash_the_run():
         cfg = {"workdir": str(w), "translator": {"type": "mock"}, "judge_a": {"type": "mock", "tag": "j"}}
         r = p.run(d, cfg, log=logs.append)
         assert r["stats"] == {"BLOCK": 5}, r["stats"]
-        assert any("interrompo" in l for l in logs), logs
+        assert any("stopping the checks" in l for l in logs), logs
         assert any(m for m in w.rglob("manifest.json"))
         # c) il repair fallisce
         d = _mod(tempfile.mkdtemp()); (d / "i18n" / "default.json").write_text('{"a":"Hi @, take {{Item}} now"}')
@@ -462,9 +462,9 @@ def test_unreviewed_flag():
         finally:
             pipeline.make_engine = real
     r, msgs, written = run(Doubt())
-    assert r["unreviewed"] == ["k"] and "k" in written and any("ATTENZIONE" in m for m in msgs), (r, msgs)
+    assert r["unreviewed"] == ["k"] and "k" in written and any("WARNING" in m for m in msgs), (r, msgs)
     r, msgs, written = run(MockEngine())
-    assert r["unreviewed"] == [] and not any("ATTENZIONE" in m for m in msgs)
+    assert r["unreviewed"] == [] and not any("WARNING" in m for m in msgs)
     print("flag non verificate ok")
 
 

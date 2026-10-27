@@ -2,14 +2,14 @@ import os
 import urllib.request
 import json
 
-# Cerca entrambe le varianti del nome per sicurezza
+# Look for both spellings of the variable name
 key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPEN_ROUTER_API_KEY")
 
 if not key:
-    print("ERRORE: Python non riesce a leggere la variabile d'ambiente. Riavvia il PC o l'editor.")
+    print("ERROR: Python cannot read the environment variable. Restart your PC or editor.")
     exit()
 
-print("Chiave trovata!")
+print("Key found!")
 
 url = "https://openrouter.ai/api/v1/chat/completions"
 headers = {
@@ -29,7 +29,7 @@ try:
         print("\nSUCCESSO! Risposta dell'IA:")
         print(res["choices"][0]["message"]["content"])
 except Exception as e:
-    print("\nERRORE RESTITUITO DA OPENROUTER:")
+    print("\nERROR RETURNED BY OPENROUTER:")
     if hasattr(e, 'read'):
         print(e.read().decode('utf-8'))
     else:
