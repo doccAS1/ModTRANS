@@ -8,7 +8,7 @@ LANG_RX = re.compile(r"^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}$")
 def valid_lang(code):
     """Il codice lingua finisce nel nome di un file (i18n/<code>.json): niente percorsi."""
     if not isinstance(code, str) or not LANG_RX.fullmatch(code):
-        raise ValueError(f"codice lingua non valido: {code!r}")
+        raise ValueError(f"invalid language code: {code!r}")
     return code
 
 

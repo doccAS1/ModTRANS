@@ -34,10 +34,10 @@ class Glossary:
             if self._has(t, src):
                 forms = v if isinstance(v, list) else [v]
                 if not any(f.lower() in dst.lower() for f in forms):
-                    issues.append({"type": "glossary", "detail": f"'{t}' va reso con {forms}",
+                    issues.append({"type": "glossary", "detail": f"'{t}' must be rendered as {forms}",
                                    "suggestion": forms[0]})
         for k in self.keep:
             if self._has(k, src) and k.lower() not in dst.lower():
-                issues.append({"type": "glossary", "detail": f"'{k}' va lasciato invariato",
+                issues.append({"type": "glossary", "detail": f"'{k}' must be left unchanged",
                                "suggestion": k})
         return issues

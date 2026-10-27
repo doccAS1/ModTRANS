@@ -5,9 +5,9 @@ from .engines.base import extract_json
 
 
 def preset_block(preset):
-    return (f"GIOCO: {preset['game']}\nAMBIENTAZIONE: {preset['setting']}\nTONO: {preset['tone']}\n"
-            "REGOLE DI STILE:\n- " + "\n- ".join(preset["style_rules"]) +
-            "\nPERSONAGGI:\n" + "\n".join(f"- {k}: {v}" for k, v in preset.get("characters", {}).items()))
+    return (f"GAME: {preset['game']}\nSETTING: {preset['setting']}\nTONE: {preset['tone']}\n"
+            "STYLE RULES:\n- " + "\n- ".join(preset["style_rules"]) +
+            "\nCHARACTERS:\n" + "\n".join(f"- {k}: {v}" for k, v in preset.get("characters", {}).items()))
 
 
 class Translator:
@@ -20,18 +20,18 @@ class Translator:
         self.target_lang = target_lang
 
     def system(self):
-        lang_pair = f"da {self.source_lang} a {self.target_lang}" if self.source_lang != "Auto" else f"verso {self.target_lang}"
+        lang_pair = f"from {self.source_lang} to {self.target_lang}" if self.source_lang != "Auto" else f"into {self.target_lang}"
         return ("# ROLE: translator\n"
-                f"Sei un traduttore professionista di videogiochi, specializzato in mod. Devi tradurre tassativamente {lang_pair}.\n\n"
+                f"You are a professional video game translator specialised in mods. You must translate {lang_pair}.\n\n"
                 f"{preset_block(self.preset)}\n\n"
-                "REGOLE TASSATIVE:\n"
-                "- I segnaposto ⟦N⟧ sono codici di gioco: copiali IDENTICI, tutti, senza duplicarli né tradurli. "
-                f"Puoi spostarli solo se la sintassi della lingua di destinazione ({self.target_lang}) lo richiede.\n"
-                "- Non tradurre né modificare numeri.\n"
-                "- Rispetta il glossario vincolante fornito per ogni elemento.\n"
-                "- La chiave (key) dà contesto su chi parla/dove appare il testo: usala, ma non tradurla.\n"
-                "- Rispondi SOLO con un oggetto JSON {\"id\": \"traduzione\"} con tutti gli id ricevuti. "
-                f"Tutto il testo tradotto generato deve essere ESCLUSIVAMENTE in {self.target_lang}.")
+                "STRICT RULES:\n"
+                "- The ⟦N⟧ placeholders are game codes: copy ALL of them IDENTICALLY, without duplicating or translating them. "
+                f"You may move them only if the grammar of the target language ({self.target_lang}) requires it.\n"
+                "- Do not translate or change numbers.\n"
+                "- Follow the binding glossary provided for each item.\n"
+                "- The key gives context on who speaks / where the text appears: use it, but do not translate it.\n"
+                "- Reply with a JSON object ONLY, {\"id\": \"translation\"}, with every id received. "
+                f"All translated text must be EXCLUSIVELY in {self.target_lang}.")
 
     def translate(self, units):
         """units con .masked già valorizzato -> {key: testo_mascherato_tradotto}"""
@@ -44,7 +44,7 @@ class Translator:
             try:
                 res = extract_json(self.engine.chat(self.system(), json.dumps({"items": items}, ensure_ascii=False)))
             except Exception as e:
-                print(f"  ! batch fallito ({e}); le chiavi verranno marcate BLOCK")
+                print(f"  ! batch failed ({e}); its keys will be marked BLOCK")
                 continue
             for n, u in enumerate(chunk, 1):
                 if isinstance(res.get(str(n)), str):

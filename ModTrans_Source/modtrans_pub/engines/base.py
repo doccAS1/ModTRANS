@@ -28,7 +28,7 @@ def _post(url, headers, payload, timeout=DEFAULT_TIMEOUT, retries=3):
             if i < retries - 1:
                 time.sleep(2 * (i + 1))
                 continue
-    raise RuntimeError(f"Connessione fallita o troppo lenta dopo {retries} tentativi "
+    raise RuntimeError(f"Connection failed or too slow after {retries} attempts "
                        f"(timeout {timeout}s): {last}")
 
 
@@ -56,7 +56,7 @@ class AnthropicEngine(Engine):
                   {"model": self.model, "max_tokens": self.max_tokens, "system": system,
                    "messages": [{"role": "user", "content": user}]}, timeout=self.timeout)
         if "error" in r:
-            raise RuntimeError(f"Errore API Anthropic: {r['error']}")
+            raise RuntimeError(f"Anthropic API error: {r['error']}")
         return "".join(b.get("text", "") for b in r["content"] if b.get("type") == "text")
 
 class OpenAICompatEngine(Engine):
@@ -87,11 +87,11 @@ class OpenAICompatEngine(Engine):
                                 {"role": "user", "content": user}]}, timeout=self.timeout)
         
         if "error" in r:
-            raise RuntimeError(f"Errore API ({self.base}): {json.dumps(r['error'])}")
+            raise RuntimeError(f"API error ({self.base}): {json.dumps(r['error'])}")
             
         content = r["choices"][0]["message"].get("content")
         if content is None:
-            raise RuntimeError("L'IA ha bloccato la risposta restituendo un testo vuoto (possibile filtro sicurezza).")
+            raise RuntimeError("The AI blocked the reply and returned empty text (possible safety filter).")
         return content
 
 class MockEngine(Engine):
@@ -109,7 +109,7 @@ class MockEngine(Engine):
 def extract_json(text):
     """Estrae il primo oggetto JSON valido dalla risposta, anche con note o graffe attorno."""
     if not text:
-        raise ValueError("L'IA non ha restituito alcun testo valido.")
+        raise ValueError("The AI returned no usable text.")
     dec = json.JSONDecoder()
     # prima i blocchi ```json ... ```, poi il testo intero
     chunks = re.findall(r"```(?:json)?\s*(.*?)```", text, re.S | re.I) + [text]
@@ -123,7 +123,7 @@ def extract_json(text):
             except ValueError:
                 pass
             pos = chunk.find("{", pos + 1)
-    raise ValueError("Nessun JSON valido trovato nella risposta.")
+    raise ValueError("No valid JSON found in the reply.")
 
 def make_engine(cfg):
     kind = cfg.get("type", "mock")

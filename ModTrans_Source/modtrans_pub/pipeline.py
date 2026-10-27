@@ -18,7 +18,7 @@ PKG = Path(__file__).parent
 GOOD = {"PUBLISH", "PUBLISH_WITH_NOTE"}
 MAX_REPAIRS = 2
 MAX_ENGINE_FAILS = 3
-ENGINE_RETRY_NOTE = "(non verificata: verrà ritentata al prossimo avvio)"
+ENGINE_RETRY_NOTE = "(not verified: it will be retried on the next run)"
 
 def _lang(cfg):
     try:
@@ -30,7 +30,7 @@ def _lang(cfg):
 def pick_adapter(mod_dir, game, target_code="it"):
     cls = ADAPTERS[game]
     if not cls.detect(mod_dir):
-        raise SystemExit(f"'{mod_dir}' non sembra una mod {game} (manca manifest.json)")
+        raise SystemExit(f"'{mod_dir}' does not look like a {game} mod (manifest.json is missing)")
     return cls(mod_dir, target_code)
 
 
@@ -77,7 +77,7 @@ def run(mod_dir, cfg, dry_run=False, log=print):
         return None
 
     if not adapter.supported():
-        log(f"✗ {adapter.mod_name}: nessun file traducibile trovato (mancano i18n/default.json e content.json).")
+        log(f"✗ {adapter.mod_name}: no translatable files found (i18n/default.json and content.json are missing).")
         return None
         
     preset = json.load(open(PKG / "presets" / f"{game}.json", encoding="utf-8"))
@@ -120,8 +120,8 @@ def run(mod_dir, cfg, dry_run=False, log=print):
         if hit:
             project.set_unit(u.key, u.source, hit, "PUBLISH", gh, via="tm"); reused += 1; continue
         todo.append(u)
-    log(f"{adapter.mod_name} v{adapter.mod_version}: {len(units)} stringhe, "
-        f"{reused} già a posto, {len(todo)} da tradurre")
+    log(f"{adapter.mod_name} v{adapter.mod_version}: {len(units)} strings, "
+        f"{reused} already done, {len(todo)} to translate")
 
     translated = translator.translate(todo) if todo else {}
     stats = {}
@@ -133,7 +133,7 @@ def run(mod_dir, cfg, dry_run=False, log=print):
                 stats["BLOCK"] = stats.get("BLOCK", 0) + 1; continue
             tr = translated.get(u.key)
             if tr is None:
-                project.set_unit(u.key, u.source, "", "BLOCK", gh, [{"type": "engine", "detail": "nessuna traduzione"}])
+                project.set_unit(u.key, u.source, "", "BLOCK", gh, [{"type": "engine", "detail": "no translation returned"}])
                 stats["BLOCK"] = stats.get("BLOCK", 0) + 1; continue
 
             attempts, issues, engine_error = 0, [], None
@@ -143,7 +143,7 @@ def run(mod_dir, cfg, dry_run=False, log=print):
                     # B si consulta solo se A non ha già respinto la stringa
                     b = judge_b.evaluate(u, tr) if (judge_b and a.ok) else None
                 except Exception as e:         # rete, timeout, JSON non valido del giudice
-                    engine_error = f"giudice: {e}"; break
+                    engine_error = f"judge: {e}"; break
                 decision = aggregate(a, b)
                 issues = a.issues + (b.issues if b else [])
 
@@ -164,8 +164,8 @@ def run(mod_dir, cfg, dry_run=False, log=print):
                 engine_fails += 1
                 if engine_fails >= MAX_ENGINE_FAILS:
                     aborted = True
-                    log(f"! {MAX_ENGINE_FAILS} errori di fila dal motore di controllo ({engine_error[:120]}): "
-                        "interrompo i controlli. Le stringhe rimaste verranno ritentate al prossimo avvio.")
+                    log(f"! {MAX_ENGINE_FAILS} consecutive errors from the checking engine ({engine_error[:120]}): "
+                        "stopping the checks. The remaining strings will be retried on the next run.")
             else:
                 engine_fails = 0
 
@@ -192,15 +192,15 @@ def run(mod_dir, cfg, dry_run=False, log=print):
         originals.save()
         project.save(glossary_hash=gh, translator=t_eng.name,
                      judges={"A": ja_eng.name if ja_eng else "deterministic", "B": jb_eng.name if jb_eng else "skipped"})
-    log(f"Esito: {stats or 'nulla da fare'} | in revisione/nota: {len(review)} | "
-        f"scritte {len(mapping)}/{len(units)} chiavi" + (" (dry-run)" if dry_run else ""))
+    log(f"Result: {stats or 'nothing to do'} | in review/with note: {len(review)} | "
+        f"written {len(mapping)}/{len(units)} keys" + (" (dry-run)" if dry_run else ""))
     # stringhe scritte nella mod ma ancora in attesa di approvazione umana
     unreviewed = sorted(k for k in mapping
                         if (m := project.unit(k)) and m["decision"] == "REVISION")
     if unreviewed:
-        log(f"⚠ ATTENZIONE: {len(unreviewed)} stringa/e sono state scritte nella mod ma i giudici non erano "
-            "sicuri: la traduzione potrebbe non essere perfetta. Controllale con Manual Review "
-            "(o `review` da riga di comando).")
+        log(f"⚠ WARNING: {len(unreviewed)} string(s) were written to the mod but the reviewers were not "
+            "sure about them, so the translation may not be perfect. Check them with Manual Review "
+            "(or the `review` command).")
     return {"stats": stats, "review": review, "written": len(mapping), "total": len(units),
             "unreviewed": unreviewed}
 
