@@ -12,7 +12,7 @@ from .translator import DEFAULT_MODEL, AnthropicBackend, OpenAICompatBackend, Tr
 
 def main(argv=None, backend=None) -> int:
     ap = argparse.ArgumentParser(
-        prog="modtrans", description="Traduce le mod di Skyrim senza toccare la struttura.")
+        prog="skyrimtrans", description="Traduce le mod di Skyrim senza toccare la struttura.")
     ap.add_argument("mod", type=Path, help="cartella, .zip o .esp/.esm/.esl")
     ap.add_argument("-l", "--lang", required=True, choices=sorted(LANGS), help="lingua di destinazione")
     ap.add_argument("-s", "--source", default="english", choices=sorted(LANGS))
