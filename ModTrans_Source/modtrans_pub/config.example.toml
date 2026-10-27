@@ -31,6 +31,7 @@ batch_size = 15              # strings sent to the LLM per request.
 #                 (never paste the key itself in this file).
 #    base_url     (openai_compat only) address of the server.
 #    max_tokens   (optional) max length of each reply. Default 4096.
+#    timeout      (optional) seconds to wait for each reply. Default 120.
 #    temperature  (optional, openai_compat only) creativity. Default 0.2.
 # ============================================================================
 

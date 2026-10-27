@@ -380,10 +380,16 @@ class ModTransGUI(tk.Tk):
 
         self._apply_api_key(cfg)
         self._save_settings()
-        self.btn_translate.state(['disabled'])
+        self._set_busy(True)
         self.log(f"\n--- Starting translation for: {Path(mod).name} ---")
         export_dir = self.mods_folder.get().strip()      # letto qui, nel thread principale
         threading.Thread(target=self._run_pipeline, args=(mod, cfg, export_dir), daemon=True).start()
+
+    def _set_busy(self, busy):
+        """Durante la traduzione Review e Restore restano spenti: toccherebbero gli stessi file."""
+        st = ['disabled'] if busy else ['!disabled']
+        for b in (self.btn_translate, self.btn_review, self.btn_restore):
+            b.state(st)
 
     def _run_pipeline(self, mod_dir, cfg, export_dir=""):
         try:
@@ -397,7 +403,7 @@ class ModTransGUI(tk.Tk):
         except (Exception, SystemExit) as e:
             self.log(f"CRITICAL ERROR: {str(e)}")
         finally:
-            self._ui(lambda: self.btn_translate.state(['!disabled']))
+            self._ui(lambda: self._set_busy(False))
 
     def _deploy(self, src_path, export_dir):
         """Copia la mod tradotta nella cartella Mods. Unisce i file senza cancellare nulla."""
@@ -440,14 +446,24 @@ class ModTransGUI(tk.Tk):
         cfg = self._prepare_cfg()
         if not cfg: return
         if not messagebox.askyesno("Restore backup",
-                                   "Roll the mod back to the state before the last run?"):
+                                   "Roll the mod back to the state before the last write "
+                                   "(a translation run or an applied review)?\n\n"
+                                   "Each press undoes one step."):
             return
         try:
             ok = pipeline.restore(mod, cfg)
         except (Exception, SystemExit) as e:
             messagebox.showerror("Error", f"Restore failed:\n{e}")
             return
-        self.log("Backup restored." if ok else "No backup available for this mod.")
+        if not ok:
+            self.log("No backup available for this mod.")
+            return
+        try:
+            left = pipeline.backups_left(mod, cfg)
+        except (Exception, SystemExit):
+            left = 0
+        self.log("Backup restored." + (f" {left} older backup(s) are still available: press Restore again "
+                                       "to go back one more step." if left else " No older backups remain."))
 
 
 if __name__ == "__main__":

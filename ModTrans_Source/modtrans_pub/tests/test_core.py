@@ -439,6 +439,44 @@ def test_judge_and_repair_errors_do_not_crash_the_run():
     print("errori giudici/repair ok")
 
 
+def test_medium_bugs():
+    import socket, urllib.request
+    from modtrans.engines import base
+    from modtrans.engines.base import extract_json, OpenAICompatEngine
+    from modtrans.core.glossary import Glossary
+    # 3.2: JSON con note e graffe attorno
+    assert extract_json('Note {x}\n```json\n{"a": {"b": 1}}\n```\nbye {y}') == {"a": {"b": 1}}
+    assert extract_json('Ecco: {"a": 1} (vedi {docs})') == {"a": 1}
+    try:
+        extract_json("niente json {qui}"); assert False
+    except ValueError:
+        pass
+    # 3.3: timeout configurabile, e un read timeout viene ritentato
+    assert OpenAICompatEngine("m", timeout=7).timeout == 7 and OpenAICompatEngine("m").timeout == 120
+    calls = []
+    real, sleep = urllib.request.urlopen, base.time.sleep
+    def flaky(req, timeout=None):
+        calls.append(timeout)
+        if len(calls) < 3:
+            raise socket.timeout("timed out")
+        import io; return io.BytesIO(b'{"ok": 1}')
+    urllib.request.urlopen, base.time.sleep = flaky, lambda *_: None
+    try:
+        assert base._post("http://x", {}, {}, timeout=9) == {"ok": 1} and calls == [9, 9, 9]
+    finally:
+        urllib.request.urlopen, base.time.sleep = real, sleep
+    # 3.4: termini con punteggiatura e CJK
+    g = Glossary({"C++": "C++", "勇者": "Eroe"}, ["Pelican Town!"])
+    assert g._has("C++", "I like C++ a lot") and g._has("勇者", "这是勇者的剑")
+    assert g._has("Pelican Town!", "Hi Pelican Town! bye") and not g._has("cat", "concatenate")
+    # 2.3: codici prima scoperti
+    for src in ["Take [O 388] now", "Pick $1 or $A", "$q -1 null#Hello?", "$q 100/101 fb#Hi", "$r 5 10 evt#Nice"]:
+        m, t = mask(src)
+        assert unmask(m, t) == src
+        assert "null" not in m and "[O" not in m and "$1" not in m and "$A" not in m and "fb" not in m and "evt" not in m, m
+    print("bug medi ok")
+
+
 def test_number_check_no_blocking_false_positives():
     """2.1: separatori delle migliaia, numeri scritti a lettere; i numeri CAMBIATI restano un errore grave."""
     from modtrans.core.glossary import Glossary
@@ -473,4 +511,5 @@ if __name__ == "__main__":
     test_mask_literal_placeholder_roundtrip(); test_api_key_not_sent_over_plain_http()
     test_languages_never_stack_on_inplace_text(); test_originals_migration_and_author_update()
     test_judge_and_repair_errors_do_not_crash_the_run(); test_number_check_no_blocking_false_positives()
+    test_medium_bugs()
     print("tests ok")

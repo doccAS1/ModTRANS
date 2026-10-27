@@ -84,6 +84,7 @@ miss its own mistakes. Judges can be cheaper/smaller models because their job is
 | `api_key_env` | anthropic, openai_compat (cloud) | The **name of an environment variable** that holds your key, e.g. `"ANTHROPIC_API_KEY"`. The key itself is never written in the config, so you can share the file safely. Not needed for local servers. |
 | `base_url` | openai_compat | Server address ending in `/v1`. Ollama: `http://localhost:11434/v1`. LM Studio: `http://localhost:1234/v1`. OpenAI: `https://api.openai.com/v1`. |
 | `max_tokens` | all real engines | Maximum length of each reply. Default 4096; raise it if replies get cut off with large batches. |
+| `timeout` | all real engines | Seconds to wait for each reply before retrying (3 attempts). Default 120; raise it for slow local models. |
 | `temperature` | openai_compat | Randomness (0 = deterministic). Default 0.2, good for translation. |
 
 ### Setting your API key (cloud engines)
@@ -175,6 +176,8 @@ The original text of anything the tool rewrites in place (the manifest `Descript
 (Italian → French → Italian) always translates from the original and never from a previous translation. If the mod author publishes an update, the new text is picked up as the new original.
 
 Translation memory, manifests and backups are kept **per target language**, so translating the same mod into several languages never mixes them up.
+
+**Note:** strings marked for human review are already written to the mod with the best translation found, so the mod stays complete and playable; opening *Manual Review* lets you correct them (each applied review makes its own backup).
 
 Strings that need a human look are listed in `review.json` inside the mod's folder under your `workdir`.
 If the mod already ships its own translation file for the target language, the author's translations are kept and only missing keys are filled in.
