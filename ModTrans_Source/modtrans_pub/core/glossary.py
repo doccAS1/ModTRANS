@@ -1,6 +1,9 @@
 import hashlib, json, re
 
 
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
 class Glossary:
     def __init__(self, terms=None, keep=None):
         self.terms = terms or {}   # "Stardrop": "Goccia stellare" | [forme accettate]
@@ -17,7 +20,9 @@ class Glossary:
 
     @staticmethod
     def _has(term, text):
-        return re.search(rf"\b{re.escape(term)}\b", text, re.I) is not None
+        if _CJK.search(term):               # scritture senza spazi: niente confini di parola
+            return term.lower() in text.lower()
+        return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text, re.I) is not None
 
     def relevant(self, text):
         return {"terms": {t: v for t, v in self.terms.items() if self._has(t, text)},

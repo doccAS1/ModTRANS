@@ -6,10 +6,13 @@ PATTERNS = [
     r"\{\{[^{}]*\}\}",               # token Content Patcher {{Token}}
     r"\{\d+\}",                      # {0} stile format
     r"#\$[a-z]+(?:\s[^#]*)?#",       # #$b#  #$e#  #$c 0.5#
-    r"\$[a-z]+(?:\s-?\d+)*",         # $h $s $q 1 2
+    r"\$q\s+-?\d+(?:/-?\d+)*(?:\s+[A-Za-z_]\w*)?(?=#|$)",   # $q -1 null#  $q 100/101 fallback#
+    r"\$r\s+-?\d+\s+-?\d+(?:\s+[A-Za-z_]\w*)?",           # $r id valore evento
+    r"\$[a-zA-Z]+(?:\s-?\d+(?:/-?\d+)*)*",   # $h $s $q 1 2 $A
+    r"\$\d+",                        # $1 $2 (scelte di dialogo)
     r"%[a-z]+\d?",                   # %adj %noun %name %spouse ...
     r"<[^<>]+>",                     # markup
-    r"\[\s*\d[^\]]*\]",              # [388] [O 388]
+    r"\[\s*[A-Za-z]{0,3}\s*\d[^\]]*\]",  # [388] [O 388]
     r"@", r"\^", r"#", r"\\n",
 ]
 RX = re.compile("|".join(f"(?:{p})" for p in PATTERNS))

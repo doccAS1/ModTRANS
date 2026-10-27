@@ -196,6 +196,13 @@ def run(mod_dir, cfg, dry_run=False, log=print):
         f"scritte {len(mapping)}/{len(units)} chiavi" + (" (dry-run)" if dry_run else ""))
     return {"stats": stats, "review": review, "written": len(mapping), "total": len(units)}
 
+def backups_left(mod_dir, cfg):
+    game = cfg.get("game", "stardew")
+    adapter = pick_adapter(mod_dir, game, cfg.get("target_lang_code", "it"))
+    workdir = Path(cfg.get("workdir", "~/.modtrans")).expanduser()
+    return Project(workdir, game, adapter.mod_id, adapter.mod_version).backups_left()
+
+
 def restore(mod_dir, cfg):
     game = cfg.get("game", "stardew")
     target_code = _lang(cfg)

@@ -144,6 +144,10 @@ class Project:
         b.mkdir(parents=True, exist_ok=True)
         json.dump(rec, open(b / "backup.json", "w"))
 
+    def backups_left(self):
+        root = self.dir / "backups"
+        return sum(1 for _ in root.iterdir()) if root.exists() else 0
+
     def restore_latest(self, mod_dir):
         root = self.dir / "backups"
         if not root.exists() or not any(root.iterdir()):
