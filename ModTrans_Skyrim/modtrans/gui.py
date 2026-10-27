@@ -1,0 +1,277 @@
+"""Interfaccia web locale: `modtrans-gui` (si apre nel browser, solo su 127.0.0.1)."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import shutil
+import tempfile
+import threading
+import uuid
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from .gui_page import PAGE
+from .pipeline import LANGS, run
+from .translator import DEFAULT_MODEL, AnthropicBackend, OpenAICompatBackend, Translator
+
+SETTINGS_FILE = Path.home() / ".modtrans.json"
+SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items")  # mai la chiave API
+ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
+LANG_LABELS = {"english": "Inglese", "french": "Francese", "german": "Tedesco", "italian": "Italiano",
+               "spanish": "Spagnolo", "russian": "Russo", "polish": "Polacco", "czech": "Ceco"}
+
+
+class Cancelled(Exception):
+    pass
+
+
+class Job:
+    def __init__(self, dry: bool, name: str, lang: str):
+        self.id = uuid.uuid4().hex
+        self.state, self.phase, self.dry = "running", "Avvio", dry
+        self.done = self.total = 0
+        self.log: list[str] = []
+        self.report = self.error = self.out = None
+        self.name, self.lang = name, lang
+        self.cancel = threading.Event()
+
+
+class App:
+    def __init__(self):
+        self.token = secrets.token_urlsafe(16)
+        self.work = Path(tempfile.mkdtemp(prefix="modtrans_"))
+        self.uploads: dict[str, tuple[Path, str]] = {}
+        self.jobs: dict[str, Job] = {}
+
+    def close(self):
+        shutil.rmtree(self.work, ignore_errors=True)
+
+
+def load_saved() -> dict:
+    try:
+        return json.loads(SETTINGS_FILE.read_text("utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(s: dict) -> None:
+    try:
+        SETTINGS_FILE.write_text(json.dumps({k: s.get(k) for k in SAVE_KEYS}, ensure_ascii=False), "utf-8")
+    except Exception:
+        pass
+
+
+def make_backend(s: dict):
+    if s["provider"] == "anthropic":
+        try:
+            return AnthropicBackend(s.get("model") or DEFAULT_MODEL, s.get("api_key") or None)
+        except ImportError:
+            raise ValueError("Manca la libreria 'anthropic': esegui  pip install anthropic")
+    if not s.get("model"):
+        raise ValueError("Inserisci il nome del modello")
+    return OpenAICompatBackend(s["model"], s.get("base_url") or "https://api.openai.com/v1",
+                               s.get("api_key") or os.environ.get("OPENAI_API_KEY"))
+
+
+def run_job(app: App, job: Job, s: dict) -> None:
+    try:
+        src, _ = app.uploads[s["upload_id"]]
+        dest = app.work / f"{job.id}.zip"
+        glossary = None
+        if s.get("glossary"):
+            try:
+                glossary = json.loads(s["glossary"])
+                assert isinstance(glossary, dict)
+            except Exception:
+                raise ValueError("Il glossario non è un JSON valido (serve un oggetto {\"termine\": \"traduzione\"})")
+        if job.dry:
+            backend = lambda _sys, u: json.dumps([{"id": i["id"], "text": i["text"]} for i in json.loads(u)])
+        else:
+            backend = make_backend(s)
+            job.phase = "Verifico la connessione"
+            job.log.append("Verifico la connessione al servizio AI...")
+            try:
+                backend("Reply with the single word OK.", "ping")  # fallisce subito se chiave/server sbagliati
+            except Exception as e:  # noqa: BLE001
+                hint = ("Controlla che il server sia acceso e l'indirizzo giusto."
+                        if s["provider"] == "openai" else "Controlla la chiave API.")
+                raise RuntimeError(f"Connessione al servizio AI non riuscita. {hint} Dettaglio: {e}") from None
+        tr = Translator(backend, s["lang"].capitalize(), glossary,
+                        batch_items=max(1, int(s.get("batch_items") or 40)))
+
+        def prog(d, t):
+            if job.cancel.is_set():
+                raise Cancelled()
+            job.done, job.total = d, t
+
+        job.phase = "Analisi e traduzione"
+        job.log.append("Analisi del file e traduzione...")
+        rep = run(src, dest, tr, s["lang"], s["source"], prog)
+        job.report = {"translated": rep.translated, "kept_original": rep.kept_original,
+                      "files": rep.files, "warnings": rep.warnings, "failures": rep.failures}
+        job.log.append(f"Trovate {rep.translated} stringhe traducibili." if job.dry
+                       else f"Fatto: {rep.translated} stringhe tradotte, {len(rep.files)} file prodotti.")
+        job.out = None if job.dry else dest
+        job.phase, job.state = "Completato", "done"
+    except Cancelled:
+        job.state, job.phase = "cancelled", "Annullato"
+    except Exception as e:  # noqa: BLE001 - qualunque errore va mostrato all'utente
+        job.state, job.phase, job.error = "error", "Errore", f"{e}"
+        job.log.append(f"Errore: {e}")
+
+
+def make_handler(app: App, port_holder: list):
+    class H(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        # ------------------------------------------------------------ util
+        def _json(self, obj, code=200):
+            b = json.dumps(obj, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(b)
+
+        def _host_ok(self):
+            host = (self.headers.get("Host") or "").lower()
+            return host in {f"127.0.0.1:{port_holder[0]}", f"localhost:{port_holder[0]}"}
+
+        def _auth(self, q):
+            tok = self.headers.get("X-Token") or (q.get("t") or [""])[0]
+            return secrets.compare_digest(tok, app.token)
+
+        def _body_json(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            return json.loads(self.rfile.read(n) or b"{}")
+
+        # ------------------------------------------------------------ GET
+        def do_GET(self):
+            u, q = urlparse(self.path), parse_qs(urlparse(self.path).query)
+            if not self._host_ok():
+                return self._json({"error": "host non consentito"}, 403)
+            if u.path == "/":
+                defaults = {"langs": [[k, LANG_LABELS[k]] for k in LANGS], "saved": load_saved(),
+                            "default_model": DEFAULT_MODEL}
+                page = PAGE.replace("__TOKEN__", app.token).replace(
+                    "__DEFAULTS__", json.dumps(defaults, ensure_ascii=False).replace("</", "<\\/"))
+                b = page.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(b)
+                return
+            if not self._auth(q):
+                return self._json({"error": "non autorizzato"}, 403)
+            m = re.fullmatch(r"/api/status/([0-9a-f]{32})", u.path)
+            if m and m.group(1) in app.jobs:
+                j = app.jobs[m.group(1)]
+                return self._json({"state": j.state, "phase": j.phase, "done": j.done, "total": j.total,
+                                   "log": j.log[-200:], "report": j.report, "error": j.error, "dry": j.dry})
+            m = re.fullmatch(r"/api/download/([0-9a-f]{32})", u.path)
+            if m and m.group(1) in app.jobs and app.jobs[m.group(1)].out:
+                j = app.jobs[m.group(1)]
+                size = j.out.stat().st_size
+                fname = f"{Path(j.name).stem}_{j.lang}.zip"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.end_headers()
+                with open(j.out, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
+                return
+            self._json({"error": "non trovato"}, 404)
+
+        # ------------------------------------------------------------ POST
+        def do_POST(self):
+            u, q = urlparse(self.path), parse_qs(urlparse(self.path).query)
+            if not self._host_ok() or not self._auth(q):
+                return self._json({"error": "non autorizzato"}, 403)
+            try:
+                if u.path == "/api/upload":
+                    name = Path((q.get("name") or ["mod"])[0]).name
+                    ext = Path(name).suffix.lower()
+                    if ext not in ALLOWED_EXT:
+                        return self._json({"error": "Formato non supportato: usa .zip, .7z, .esp, .esm, .esl"}, 400)
+                    uid = uuid.uuid4().hex
+                    d = app.work / uid
+                    d.mkdir()
+                    path = d / name  # nome originale: un plugin rinominato romperebbe la mod
+                    left = int(self.headers.get("Content-Length") or 0)
+                    with open(path, "wb") as f:
+                        while left > 0:
+                            chunk = self.rfile.read(min(1 << 20, left))
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            left -= len(chunk)
+                    if left:
+                        return self._json({"error": "Caricamento interrotto"}, 400)
+                    app.uploads[uid] = (path, name)
+                    return self._json({"upload_id": uid})
+                if u.path == "/api/start":
+                    s = self._body_json()
+                    if s.get("upload_id") not in app.uploads:
+                        return self._json({"error": "Carica prima un file"}, 400)
+                    if s.get("lang") not in LANGS or s.get("source") not in LANGS:
+                        return self._json({"error": "Lingua non valida"}, 400)
+                    if s["lang"] == s["source"]:
+                        return self._json({"error": "La lingua di destinazione coincide con quella originale"}, 400)
+                    job = Job(bool(s.get("dry_run")), app.uploads[s["upload_id"]][1], s["lang"])
+                    app.jobs[job.id] = job
+                    save_settings(s)
+                    threading.Thread(target=run_job, args=(app, job, s), daemon=True).start()
+                    return self._json({"job_id": job.id})
+                m = re.fullmatch(r"/api/cancel/([0-9a-f]{32})", u.path)
+                if m and m.group(1) in app.jobs:
+                    app.jobs[m.group(1)].cancel.set()
+                    return self._json({"ok": True})
+            except (ValueError, KeyError, json.JSONDecodeError) as e:
+                return self._json({"error": f"Richiesta non valida: {e}"}, 400)
+            self._json({"error": "non trovato"}, 404)
+
+    return H
+
+
+def create_server(port: int = 0):
+    app = App()
+    holder = [0]
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app, holder))
+    holder[0] = httpd.server_port
+    return httpd, app
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="modtrans-gui", description="Interfaccia grafica (nel browser) di modtrans")
+    ap.add_argument("--port", type=int, default=0, help="porta locale (default: libera a caso)")
+    ap.add_argument("--no-browser", action="store_true")
+    a = ap.parse_args(argv)
+    httpd, app = create_server(a.port)
+    url = f"http://127.0.0.1:{httpd.server_port}/"
+    print(f"modtrans è attivo su {url}\nPremi Ctrl+C per chiudere.")
+    if not a.no_browser:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+        app.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
