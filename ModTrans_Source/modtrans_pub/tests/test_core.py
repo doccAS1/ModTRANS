@@ -439,6 +439,35 @@ def test_judge_and_repair_errors_do_not_crash_the_run():
     print("errori giudici/repair ok")
 
 
+def test_unreviewed_flag():
+    class Doubt(MockEngine):
+        def chat(self, system, user):
+            if "ROLE: judge" in system:
+                return json.dumps({"score": 0.2, "ok": False, "issues": []})
+            return super().chat(system, user)
+    def run(judge_b_engine):
+        real = pipeline.make_engine
+        pipeline.make_engine = lambda c: judge_b_engine if c.get("type") == "doubt" else real(c)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                mod = Path(d) / "m"; (mod / "i18n").mkdir(parents=True)
+                (mod / "manifest.json").write_text(json.dumps({"Name": "M", "UniqueID": "a.b", "Version": "1.0"}))
+                (mod / "i18n" / "default.json").write_text(json.dumps({"k": "Hello farmer"}))
+                cfg = {"workdir": str(Path(d) / "w"), "translator": {"type": "mock"},
+                       "judge_a": {"type": "mock"}, "judge_b": {"type": "doubt"}}
+                msgs = []
+                r = pipeline.run(mod, cfg, log=msgs.append)
+                written = json.loads((mod / "i18n" / "it.json").read_text(encoding="utf-8"))
+                return r, msgs, written
+        finally:
+            pipeline.make_engine = real
+    r, msgs, written = run(Doubt())
+    assert r["unreviewed"] == ["k"] and "k" in written and any("ATTENZIONE" in m for m in msgs), (r, msgs)
+    r, msgs, written = run(MockEngine())
+    assert r["unreviewed"] == [] and not any("ATTENZIONE" in m for m in msgs)
+    print("flag non verificate ok")
+
+
 def test_medium_bugs():
     import socket, urllib.request
     from modtrans.engines import base
@@ -511,5 +540,5 @@ if __name__ == "__main__":
     test_mask_literal_placeholder_roundtrip(); test_api_key_not_sent_over_plain_http()
     test_languages_never_stack_on_inplace_text(); test_originals_migration_and_author_update()
     test_judge_and_repair_errors_do_not_crash_the_run(); test_number_check_no_blocking_false_positives()
-    test_medium_bugs()
+    test_medium_bugs(); test_unreviewed_flag()
     print("tests ok")

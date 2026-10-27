@@ -399,6 +399,13 @@ class ModTransGUI(tk.Tk):
                 self.log("Nothing was translated, so nothing was deployed.")
                 return
             self.log("Translation completed.")
+            n = len(result.get("unreviewed", []))
+            if n:
+                self._ui(lambda: messagebox.showwarning(
+                    "Translation completed with warnings",
+                    f"{n} string(s) were written to the mod, but the reviewers were not sure about them, "
+                    "so the translation may not be perfect.\n\nOpen \"Manual Review\" to check and "
+                    "correct them."))
             self._deploy(Path(mod_dir), export_dir)
         except (Exception, SystemExit) as e:
             self.log(f"CRITICAL ERROR: {str(e)}")

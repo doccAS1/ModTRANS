@@ -177,7 +177,7 @@ The original text of anything the tool rewrites in place (the manifest `Descript
 
 Translation memory, manifests and backups are kept **per target language**, so translating the same mod into several languages never mixes them up.
 
-**Note:** strings marked for human review are already written to the mod with the best translation found, so the mod stays complete and playable; opening *Manual Review* lets you correct them (each applied review makes its own backup).
+**Note:** strings marked for human review are already written to the mod with the best translation found, so the mod stays complete and playable; opening *Manual Review* lets you correct them (each applied review makes its own backup). When this happens the log shows a **⚠ warning** with the number of such strings, the GUI shows a warning window at the end of the run, and the result contains an `unreviewed` list. Approving a string in Manual Review clears the warning for it.
 
 Strings that need a human look are listed in `review.json` inside the mod's folder under your `workdir`.
 If the mod already ships its own translation file for the target language, the author's translations are kept and only missing keys are filled in.
