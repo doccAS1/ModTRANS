@@ -53,6 +53,9 @@ Tutto il resto (script `.pex`, mesh, texture, SKSE, ecc.) viene copiato senza mo
 4. **Verifica finale**: ogni file prodotto viene riletto e confrontato con l'originale; se cambia altro oltre alle stringhe ammesse, il file resta originale.
 5. Caratteri non supportati dalla codifica del gioco (cp1252/1251/1250): la stringa resta originale.
 
+## Coerenza dei termini
+I nomi (armi, oggetti, luoghi...) vengono tradotti per primi e ricordati: quando lo stesso nome compare in un testo successivo (descrizioni, libri, dialoghi, quest, MCM), la traduzione già scelta viene ripassata al modello, anche se il testo cade in un altro lotto. Il glossario dell'utente ha sempre la precedenza.
+
 ## Limiti noti
 - Skyrim: niente giapponese/cinese (richiedono font e codifiche specifiche).
 - Testi dentro gli script Papyrus compilati (`.pex`) non sono toccati: se una mod mostra messaggi da script, quelli restano in inglese.
