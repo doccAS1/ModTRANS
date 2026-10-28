@@ -15,12 +15,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import context as ctx
 from .gui_page import PAGE
 from .pipeline import LANGS, run
 from .translator import DEFAULT_MODEL, AnthropicBackend, OpenAICompatBackend, Translator
 
 SETTINGS_FILE = Path.home() / ".skyrimtrans.json"
-SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items")  # mai la chiave API
+SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items", "nexus_game")  # mai la chiave API
 ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
 LANG_LABELS = {"english": "Inglese", "french": "Francese", "german": "Tedesco", "italian": "Italiano",
                "spanish": "Spagnolo", "russian": "Russo", "polish": "Polacco", "czech": "Ceco"}
@@ -78,6 +79,35 @@ def make_backend(s: dict):
                                s.get("api_key") or os.environ.get("OPENAI_API_KEY"))
 
 
+def build_context(app: App, b: dict) -> dict:
+    """Contesto della mod: offline sempre; Nexus (API ufficiale) e riassunto AI se richiesti."""
+    if b.get("upload_id") not in app.uploads:
+        raise ValueError("Carica prima un file")
+    src, _ = app.uploads[b["upload_id"]]
+    try:
+        offline = ctx.offline_for_path(src)
+        nexus, nexus_name = None, None
+        if (b.get("nexus_ref") or "").strip():
+            mod_id = ctx.parse_nexus_ref(b["nexus_ref"])
+            if mod_id is None:
+                raise ctx.ContextError("Link o ID Nexus non riconosciuto (es. 168874 o .../mods/168874)")
+            nexus = ctx.fetch_nexus(mod_id, (b.get("nexus_key") or os.environ.get("NEXUS_API_KEY") or "").strip(),
+                                    b.get("nexus_game") or "skyrimspecialedition")
+            nexus_name = nexus["name"]
+        backend = None
+        if nexus:  # il riassunto usa lo stesso servizio AI scelto per la traduzione
+            try:
+                backend = make_backend(b)
+            except ValueError:
+                backend = None
+        text, sources, warning = ctx.build_brief(offline, nexus, backend)
+        if nexus and backend is None:
+            warning = "Nessun servizio AI configurato: mostro i dati grezzi di Nexus"
+    except ctx.ContextError:
+        raise  # messaggio già chiaro per l'utente
+    return {"brief": text, "sources": sources or ["nessuna"], "nexus_name": nexus_name, "warning": warning}
+
+
 def run_job(app: App, job: Job, s: dict) -> None:
     try:
         src, _ = app.uploads[s["upload_id"]]
@@ -103,6 +133,8 @@ def run_job(app: App, job: Job, s: dict) -> None:
                 raise RuntimeError(f"Connessione al servizio AI non riuscita. {hint} Dettaglio: {e}") from None
         tr = Translator(backend, s["lang"].capitalize(), glossary,
                         batch_items=max(1, int(s.get("batch_items") or 40)))
+        if (s.get("brief") or "").strip():
+            tr.set_brief(s["brief"])  # contesto scritto/corretto dall'utente
 
         def prog(d, t):
             if job.cancel.is_set():
@@ -220,7 +252,9 @@ def make_handler(app: App, port_holder: list):
                     if left:
                         return self._json({"error": "Caricamento interrotto"}, 400)
                     app.uploads[uid] = (path, name)
-                    return self._json({"upload_id": uid})
+                    return self._json({"upload_id": uid, "nexus_id": ctx.detect_nexus_id(name)})
+                if u.path == "/api/context":
+                    return self._json(build_context(app, self._body_json()))
                 if u.path == "/api/start":
                     s = self._body_json()
                     if s.get("upload_id") not in app.uploads:
@@ -238,6 +272,8 @@ def make_handler(app: App, port_holder: list):
                 if m and m.group(1) in app.jobs:
                     app.jobs[m.group(1)].cancel.set()
                     return self._json({"ok": True})
+            except ctx.ContextError as e:
+                return self._json({"error": str(e)}, 400)
             except (ValueError, KeyError, json.JSONDecodeError) as e:
                 return self._json({"error": f"Richiesta non valida: {e}"}, 400)
             self._json({"error": "non trovato"}, 404)

@@ -25,6 +25,11 @@ def main(argv=None, backend=None) -> int:
     ap.add_argument("--api-key", default=None, help="altrimenti OPENAI_API_KEY / ANTHROPIC_API_KEY")
     ap.add_argument("--batch-items", type=int, default=40, help="stringhe per richiesta (con modelli piccoli: 5-10)")
     ap.add_argument("--glossary", type=Path, help="JSON {termine: traduzione}")
+    ap.add_argument("--brief", help="contesto sulla mod dato al modello (testo)")
+    ap.add_argument("--brief-file", type=Path, help="come --brief, da file di testo")
+    ap.add_argument("--nexus", help="ID o link Nexus Mods della mod, oppure 'auto' (ID dal nome del file)")
+    ap.add_argument("--nexus-key", default=os.environ.get("NEXUS_API_KEY"), help="chiave API Nexus (o NEXUS_API_KEY)")
+    ap.add_argument("--nexus-game", default="skyrimspecialedition", choices=["skyrimspecialedition", "skyrim"])
     ap.add_argument("--report", type=Path, help="scrive il report in JSON")
     a = ap.parse_args(argv)
 
@@ -48,6 +53,24 @@ def main(argv=None, backend=None) -> int:
 
     if not a.mod.exists():
         ap.error(f"file non trovato: {a.mod}")
+    try:
+        if a.brief_file:
+            tr.set_brief(a.brief_file.read_text("utf-8"))
+        elif a.brief:
+            tr.set_brief(a.brief)
+        elif a.nexus:
+            from . import context as ctx
+            ref = ctx.detect_nexus_id(a.mod.name) if a.nexus == "auto" else ctx.parse_nexus_ref(a.nexus)
+            if ref is None:
+                ap.error("ID Nexus non riconosciuto")
+            nx = ctx.fetch_nexus(ref, a.nexus_key or "", a.nexus_game)
+            text, srcs, warn = ctx.build_brief(ctx.offline_for_path(a.mod), nx, backend)
+            tr.set_brief(text)
+            print(f"Contesto da: {', '.join(srcs)} (Nexus: {nx['name']})" + (f" - {warn}" if warn else ""))
+            print(f"  {text[:300]}")
+    except ValueError as e:
+        print(f"Errore: {e}", file=sys.stderr)
+        return 2
     try:
         rep = run(a.mod, out, tr, a.lang, a.source, prog)
     except ValueError as e:

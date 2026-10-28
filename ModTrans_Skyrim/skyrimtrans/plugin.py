@@ -197,7 +197,7 @@ def extract_units(plugin: Plugin, enc: str, file: str) -> tuple[list[Unit], list
             if s is None:
                 warns.append(f"{rt}.{st} {rec.formid:08X}: non è una stringa valida, saltato")
                 continue
-            units.append(Unit(file, (ri, si), kind, s))
+            units.append(Unit(file, (ri, si), f"{kind}:{rt}", s))
     return units, warns
 
 
