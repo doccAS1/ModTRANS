@@ -9,6 +9,10 @@ skyrimtrans-gui          # si apre nel browser, trascini la mod e scegli lingua 
 ```
 Gira solo sul tuo PC (127.0.0.1). La chiave API non viene salvata su disco. "Solo analisi" mostra quante stringhe verrebbero tradotte senza chiamare nessuna AI.
 
+## Eseguibile Windows (.exe)
+Senza installare Python: su GitHub vai in **Actions → Build SkyrimTrans for Windows → Run workflow**, poi scarica `SkyrimTrans-windows.zip` dagli artifact. Dentro c'è `SkyrimTrans.exe`: lo avvii, si apre il browser e resta una finestra nera aperta (chiudila per spegnere il programma).
+In alternativa, su un PC Windows con Python: doppio clic su `build_exe.bat` (crea `dist\SkyrimTrans.exe`).
+
 ## Riga di comando
 ```bash
 pip install -e .
