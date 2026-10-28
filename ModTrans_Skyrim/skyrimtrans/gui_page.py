@@ -56,6 +56,21 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
   <input type="file" id="file" class="hide" accept=".zip,.7z,.esp,.esm,.esl">
 </section>
 
+<section class="card" id="ctxCard">
+  <h2>Contesto della mod</h2>
+  <p class="note" style="margin:0 0 10px">Aiuta il modello a capire di che mod si tratta (tono, ambientazione, nomi da non tradurre). Viene letto dal plugin; puoi aggiungere i dati della pagina Nexus Mods e correggere il testo qui sotto.</p>
+  <div class="row">
+    <div class="field"><label for="nexus_ref">Link o ID Nexus Mods (facoltativo)</label><input type="text" id="nexus_ref" autocomplete="off" placeholder="es. 168874"></div>
+    <div class="field"><label for="nexus_key">Chiave API Nexus <span>(gratuita: Nexus &rarr; Account &rarr; API)</span></label><input type="password" id="nexus_key" autocomplete="off" placeholder="non viene salvata su disco"></div>
+  </div>
+  <div class="row">
+    <div class="field"><label for="nexus_game">Gioco su Nexus</label><select id="nexus_game"><option value="skyrimspecialedition">Skyrim Special Edition</option><option value="skyrim">Skyrim (Legendary Edition)</option></select></div>
+    <div class="field" style="align-self:end"><button class="sec" id="ctxBtn" disabled>Aggiungi dati da Nexus Mods</button></div>
+  </div>
+  <div class="field"><label for="brief">Contesto dato al modello (modificabile)</label><textarea id="brief" style="min-height:110px;font-family:inherit;font-size:14px" placeholder="Carica una mod: il contesto letto dal plugin apparirà qui."></textarea></div>
+  <span id="ctxMsg" class="note"></span> <span id="ctxErr" class="err"></span>
+</section>
+
 <section class="card">
   <h2>Traduzione</h2>
   <div class="row">
@@ -103,7 +118,7 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
 <script>
 const T="__TOKEN__", D=__DEFAULTS__;
 const $=s=>document.querySelector(s);
-let uploadId=null, jobId=null, timer=null;
+let uploadId=null, jobId=null, timer=null, briefTouched=false;
 
 const PRESETS={
   claude:{provider:"anthropic",url:"",model:D.default_model,batch:40,key:"(o variabile ANTHROPIC_API_KEY)"},
@@ -148,7 +163,8 @@ async function pick(file){
   if(!file)return;
   $("#msg").textContent=""; $("#go").disabled=true; uploadId=null;
   $("#dropTitle").textContent=file.name; $("#dropSub").textContent="Caricamento...";
-  try{ const j=await upload(file); uploadId=j.upload_id; $("#dropSub").textContent=fmt(file.size)+" · clicca o trascina un altro file per cambiarlo"; $("#go").disabled=false }
+  try{ const j=await upload(file); uploadId=j.upload_id; $("#dropSub").textContent=fmt(file.size)+" · clicca o trascina un altro file per cambiarlo"; $("#go").disabled=false; $("#ctxBtn").disabled=false;
+       $("#nexus_ref").value=j.nexus_id||""; briefTouched=false; loadContext(false) }
   catch(e){ $("#dropTitle").textContent="Trascina qui la mod"; $("#dropSub").textContent=""; $("#msg").textContent=e.message }
 }
 const drop=$("#drop");
@@ -160,13 +176,29 @@ for(const ev of ["dragleave","drop"])drop.addEventListener(ev,e=>{e.preventDefau
 drop.addEventListener("drop",e=>pick(e.dataTransfer.files[0]));
 addEventListener("dragover",e=>e.preventDefault()); addEventListener("drop",e=>e.preventDefault());
 
+$("#brief").oninput=()=>{briefTouched=true};
+$("#nexus_game").value=D.saved.nexus_game||"skyrimspecialedition";
+async function loadContext(withNexus){
+  if(!uploadId)return;
+  $("#ctxErr").textContent=""; $("#ctxMsg").textContent=withNexus?"Leggo la pagina Nexus e preparo il riassunto...":"Leggo il plugin...";
+  const p=PRESETS[$("#preset").value];
+  const body={upload_id:uploadId,provider:p.provider,model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim()};
+  if(withNexus){body.nexus_ref=$("#nexus_ref").value.trim();body.nexus_key=$("#nexus_key").value.trim();body.nexus_game=$("#nexus_game").value}
+  try{
+    const j=await api("/api/context",{method:"POST",body:JSON.stringify(body)});
+    if(withNexus||!briefTouched){$("#brief").value=j.brief;briefTouched=false}
+    $("#ctxMsg").textContent="Fonti: "+j.sources.join(", ")+(j.nexus_name?" · Nexus: "+j.nexus_name:"")+(j.warning?" · "+j.warning:"");
+  }catch(e){ $("#ctxMsg").textContent=""; $("#ctxErr").textContent=e.message }
+}
+$("#ctxBtn").onclick=()=>{ if(!$("#nexus_ref").value.trim()){$("#ctxErr").textContent="Inserisci il link o l'ID della mod su Nexus";return} loadContext(true) };
+
 function setRunning(r){ $("#go").disabled=r||!uploadId; $("#stop").classList.toggle("hide",!r); }
 $("#go").onclick=async()=>{
   $("#msg").textContent=""; $("#result").classList.add("hide");
   const p=PRESETS[$("#preset").value];
   const s={upload_id:uploadId,lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
     model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim(),
-    batch_items:parseInt($("#batch").value)||40,glossary:$("#glossary").value.trim(),dry_run:$("#dry").checked};
+    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,glossary:$("#glossary").value.trim(),dry_run:$("#dry").checked};
   try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify(s)}); jobId=j.job_id; }
   catch(e){ $("#msg").textContent=e.message; return }
   setRunning(true); $("#progress").classList.remove("hide"); $("#log").textContent="";

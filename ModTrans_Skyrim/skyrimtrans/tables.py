@@ -36,6 +36,19 @@ TABLE[("TES4", "SNAM")] = "plugin_description"
 
 TABLE_RTYPES = {r for r, _ in TABLE}
 
+RTYPE_NAMES = {
+    "ACTI": "activator/object", "ALCH": "potion/food/drink", "AMMO": "ammunition", "APPA": "alchemy apparatus",
+    "ARMO": "armor/clothing", "AVIF": "skill/attribute", "BOOK": "book/note", "CELL": "interior or exterior cell",
+    "CLAS": "NPC class", "CLFM": "color", "CONT": "container", "DIAL": "dialogue topic", "DOOR": "door",
+    "ENCH": "enchantment", "EXPL": "explosion", "FACT": "faction", "FLOR": "flora/plant", "FURN": "furniture",
+    "HAZD": "hazard", "HDPT": "head part", "INFO": "dialogue line", "INGR": "ingredient", "KEYM": "key",
+    "LCTN": "location", "LIGH": "light/torch", "LSCR": "loading screen", "MESG": "message box",
+    "MGEF": "magic effect", "MISC": "miscellaneous item", "MSTT": "static object", "NPC_": "NPC",
+    "PERK": "perk", "PROJ": "projectile", "QUST": "quest", "RACE": "race", "SCRL": "scroll", "SHOU": "shout",
+    "SLGM": "soul gem", "SPEL": "spell", "TACT": "talking activator", "TREE": "tree", "WEAP": "weapon",
+    "WOOP": "word of power", "WRLD": "worldspace", "TES4": "mod header",
+}
+
 KIND_HINTS = {
     "name": "short name or label of an item, spell, place, NPC or UI element; keep it concise",
     "description": "description text of an item, perk, spell or effect",

@@ -49,6 +49,12 @@ Tutto il resto (script `.pex`, mesh, texture, SKSE, ecc.) viene copiato senza mo
 4. **Verifica finale**: ogni file prodotto viene riletto e confrontato con l'originale; se cambia altro oltre alle stringhe ammesse, il file resta originale.
 5. Caratteri non supportati dalla codifica del gioco (cp1252/1251/1250): la stringa resta originale.
 
+## Contesto della mod
+Il modello riceve, oltre alle stringhe, un breve contesto sulla mod e il tipo di record di ogni testo (arma, pozione, NPC...), per scegliere tono e termini giusti.
+1. **Sempre, in locale:** autore, descrizione e dipendenze lette dal plugin (es. `Requiem.esp`).
+2. **Facoltativo, Nexus Mods:** inserisci il link o l'ID della mod (viene proposto quello nel nome del file scaricato) e la tua chiave API personale (gratuita: Nexus → Account → API). Si usa l'API ufficiale; la chiave non viene salvata. Da riga di comando: `--nexus auto --nexus-key ...` (o `NEXUS_API_KEY`).
+3. **Riassunto:** con i dati di Nexus il modello scrive un riassunto di massimo 120 parole, che nell'interfaccia puoi correggere prima di tradurre (o passare tu con `--brief` / `--brief-file`). Il testo preso dal web è trattato come dato, mai come istruzione.
+
 ## Coerenza dei termini
 I nomi (armi, oggetti, luoghi...) vengono tradotti per primi e ricordati: quando lo stesso nome compare in un testo successivo (descrizioni, libri, dialoghi, quest, MCM), la traduzione già scelta viene ripassata al modello, anche se il testo cade in un altro lotto. Il glossario dell'utente ha sempre la precedenza.
 

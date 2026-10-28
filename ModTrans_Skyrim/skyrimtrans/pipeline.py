@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import mcm, plugin as pl, strings_file as sf
+from .context import offline_facts, plugin_info
 from .common import Unit
 from .protect import fit_encoding
 from .translator import Translator
@@ -112,6 +113,10 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                 continue
             rep.warnings += w
             all_units += u
+
+        if not translator.brief:  # contesto minimo sempre disponibile: autore, descrizione, dipendenze
+            translator.set_brief(offline_facts(
+                [plugin_info(obj, rel, enc) for k, rel, obj in jobs if k == "plugin"]))
 
         fit = lambda s: fit_encoding(s, enc)
         mcm_fit = lambda s: s
