@@ -183,3 +183,24 @@ def test_openai_compatible_local_server(tmp_path):
     full = {r.formid: dict(r.subs()).get("FULL") for r in pl.Plugin(new).records}
     assert full[0x801] == b"IT Ancient Tome\0" and full[0x802] == b"IT Iron Sword\0"
     assert pl.verify_plugin(build_plugin(), new, "cp1252") == []
+
+
+def test_term_consistency_across_batches():
+    """Un nome tradotto in un lotto viene ripassato ai lotti successivi in cui compare."""
+    systems = []
+
+    def backend(system, user):
+        systems.append(system)
+        return json.dumps([{"id": i["id"], "text": "IT " + i["text"]} for i in json.loads(user)])
+
+    tr = Translator(backend, "Italian", batch_items=1)
+    items = [("description", "Find the Ancient Tome in the cave."), ("name", "Ancient Tome"),
+             ("description", "Nothing special here."), ("name", "Gold")]
+    out = tr.translate_all(items)
+    assert len(out) == 4
+    # i nomi vengono tradotti per primi, quindi il testo con "Ancient Tome" riceve il termine
+    with_term = [s for s in systems if "Ancient Tome => IT Ancient Tome" in s]
+    assert len(with_term) == 1
+    assert "Gold" not in with_term[0] and "Nothing" not in with_term[0]
+    # nessun termine nel primo lotto (nome) e nei testi senza nomi noti
+    assert sum("already translated earlier" in s for s in systems) == 1
