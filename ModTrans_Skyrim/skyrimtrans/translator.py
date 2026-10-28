@@ -26,6 +26,14 @@ type of text. Reply with ONLY a JSON array of {{"id", "text"}} with the translat
 {glossary}"""
 
 
+NAME_KINDS = {"name"}
+MIN_TERM, MAX_TERM, MAX_TERMS_PER_BATCH = 4, 60, 40
+TERMS_HEADER = (
+    "\n\nTerms already translated earlier in this same mod. When one of these names appears in a text "
+    "(same spelling), reuse its translation EXACTLY so the mod stays consistent. "
+    "Ignore an entry if the words are used as ordinary vocabulary rather than as that name:\n")
+
+
 class AnthropicBackend:
     def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
         import anthropic
@@ -95,6 +103,21 @@ class Translator:
         self.batch_chars, self.batch_items, self.retries = batch_chars, batch_items, retries
         self.cache: dict[tuple[str, str], str] = {}
         self.failed: dict[tuple[str, str], str] = {}
+        # Memoria dei nomi già tradotti in questa mod (nome originale -> traduzione):
+        # viene ripassata ai lotti successivi per tenere coerenti i termini.
+        self.terms: dict[str, str] = {}
+
+    def _remember(self, key: tuple[str, str], out: str) -> None:
+        kind, text = key
+        if kind in NAME_KINDS and MIN_TERM <= len(text) <= MAX_TERM and "<" not in text and "<" not in out:
+            self.terms[text] = out
+
+    def _terms_for(self, masked_texts: list[str]) -> dict[str, str]:
+        """Termini già tradotti che compaiono (maiuscole incluse) nei testi del lotto."""
+        blob = "\n".join(masked_texts)
+        hits = {src: tr for src, tr in self.terms.items()
+                if re.search(r"(?<!\w)" + re.escape(src) + r"(?!\w)", blob)}
+        return dict(sorted(hits.items(), key=lambda kv: -len(kv[0]))[:MAX_TERMS_PER_BATCH])
 
     def translate_all(self, items: list[tuple[str, str]], fit: Callable[[str], str] = lambda s: s,
                       progress: Callable[[int, int], None] | None = None) -> dict[tuple[str, str], str]:
@@ -108,7 +131,8 @@ class Translator:
                 self.failed[key] = p.skip_reason
             else:
                 todo[key] = p
-        keys = list(todo)
+        # prima i nomi: così i loro termini sono già noti quando si traducono descrizioni, libri e dialoghi
+        keys = sorted(todo, key=lambda k: k[0] not in NAME_KINDS)
         done = 0
         i = 0
         while i < len(keys):
@@ -131,8 +155,12 @@ class Translator:
             payload = json.dumps(
                 [{"id": n, "kind": KIND_HINTS.get(k[0], k[0]), "text": todo[k].masked}
                  for n, k in enumerate(pending)], ensure_ascii=False)
+            system = self.system
+            terms = self._terms_for([todo[k].masked for k in pending])
+            if terms:
+                system += TERMS_HEADER + "\n".join(f"- {a} => {b}" for a, b in terms.items())
             try:
-                got = _parse_reply(self.backend(self.system, payload))
+                got = _parse_reply(self.backend(system, payload))
             except Exception as e:  # rete, JSON, ecc.
                 last = f"errore backend: {e}"
                 time.sleep(min(2 ** attempt, 8)) if attempt < self.retries else None
@@ -146,6 +174,7 @@ class Translator:
                         raise ProtectionError(last)
                     out = fit(restore(todo[k], got[n]))
                     self.cache[k] = out
+                    self._remember(k, out)
                 except ProtectionError as e:
                     self.failed[k] = str(e)
                     still.append(k)
