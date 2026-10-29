@@ -14,7 +14,7 @@ _FULL = (
 
 TABLE: dict[tuple[str, str], str] = {(r, "FULL"): "name" for r in _FULL}
 
-for _r in "ARMO WEAP AMMO RACE PERK AVIF CLAS SHOU SCRL APPA QUST".split():
+for _r in "ARMO WEAP AMMO RACE PERK AVIF CLAS SHOU SCRL APPA QUST SPEL".split():
     TABLE[(_r, "DESC")] = "description"
 TABLE[("MGEF", "DNAM")] = "description"
 TABLE[("BOOK", "DESC")] = "book_text"
@@ -22,6 +22,7 @@ TABLE[("LSCR", "DESC")] = "loading_screen"
 TABLE[("MESG", "DESC")] = "message"
 TABLE[("MESG", "ITXT")] = "button"
 TABLE[("PERK", "EPF2")] = "button"
+TABLE[("DIAL", "FULL")] = "dialogue_prompt"   # è la battuta del giocatore nel menu di dialogo, non un nome
 TABLE[("INFO", "NAM1")] = "dialogue"
 TABLE[("INFO", "RNAM")] = "dialogue_prompt"
 TABLE[("QUST", "CNAM")] = "quest_log"
