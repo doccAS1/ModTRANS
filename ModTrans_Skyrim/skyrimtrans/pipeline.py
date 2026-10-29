@@ -32,6 +32,7 @@ class Report:
     files: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    output: str = ""   # percorso finale del risultato (zip o cartella)
 
 
 def safe_extract(zip_path: Path, dest: Path) -> None:
@@ -70,12 +71,69 @@ def prepare_input(src: Path, work: Path) -> Path:
     return root
 
 
+_NEXUS_TAIL = re.compile(r"-\d{3,7}-\d+(?:-\d+){0,3}-\d{9,11}$")
+
+
+def clean_name(filename: str) -> str:
+    """Nome leggibile dal file scaricato: toglie estensione, ID/versione/timestamp di Nexus e caratteri vietati."""
+    stem = _NEXUS_TAIL.sub("", Path(filename).stem)
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem).strip(" .")
+    return stem or "mod"
+
+
+def unique_path(p: Path) -> Path:
+    """Se `p` esiste già, aggiunge ' (2)', ' (3)'... prima dell'estensione: non si sovrascrive mai nulla."""
+    if not p.exists():
+        return p
+    stem, suffix = (p.name, "") if p.is_dir() or not p.suffix else (p.stem, p.suffix)
+    n = 2
+    while True:
+        cand = p.with_name(f"{stem} ({n}){suffix}")
+        if not cand.exists():
+            return cand
+        n += 1
+
+
+class OutputError(ValueError):
+    """Problema con la cartella o il file di output (messaggio già chiaro per l'utente)."""
+
+
+def check_writable_dir(d: Path) -> Path:
+    """Crea la cartella se serve e verifica che si possa scrivere. ValueError con messaggio chiaro."""
+    d = d.expanduser()
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / f".skyrimtrans_{os.getpid()}.tmp"
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError as e:
+        raise OutputError(f"Non posso scrivere nella cartella {d}: {e.strerror or e}") from None
+    return d
+
+
+def write_output(out: Path, dest: Path, as_folder: bool, overwrite: bool = False) -> Path:
+    """Scrive il risultato come zip o come cartella. Di default non sovrascrive: sceglie un nome libero."""
+    if not overwrite:
+        dest = unique_path(dest)
+    elif dest.exists():
+        shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if as_folder:
+        shutil.copytree(out, dest)
+    else:
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in sorted(out.rglob("*")):
+                if p.is_file():
+                    z.write(p, p.relative_to(out).as_posix())
+    return dest
+
+
 def _target_name(name: str, src_lang: str, tgt_lang: str) -> str:
     return re.sub(re.escape(src_lang), tgt_lang, name, flags=re.IGNORECASE)
 
 
 def run(src: Path, dest: Path, translator: Translator, target: str,
-        source: str = "english", progress=None) -> Report:
+        source: str = "english", progress=None, as_folder: bool = False, overwrite: bool = False) -> Report:
     tgt_name, enc = LANGS[target.lower()]
     src_name, _ = LANGS[source.lower()]
     rep = Report()
@@ -175,9 +233,5 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                 rel = newrel
             rep.files.append(rel)
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
-            for p in sorted(out.rglob("*")):
-                if p.is_file():
-                    z.write(p, p.relative_to(out).as_posix())
+        rep.output = str(write_output(out, dest, as_folder, overwrite))
     return rep
