@@ -204,3 +204,24 @@ def test_term_consistency_across_batches():
     assert "Gold" not in with_term[0] and "Nothing" not in with_term[0]
     # nessun termine nel primo lotto (nome) e nei testi senza nomi noti
     assert sum("already translated earlier" in s for s in systems) == 1
+
+
+def test_spell_description_and_dialogue_topic_kinds():
+    """Trovato analizzando una mod vera: SPEL.DESC mancava; DIAL.FULL è una battuta, non un nome."""
+    spel = rec("SPEL", 0x900, [sub("EDID", b"Ab\0"), sub("FULL", b"Calder's Vigor\0"),
+                               sub("DESC", b"Health regenerates 5% faster while Calder is following.\0")])
+    dial = rec("DIAL", 0x901, [sub("EDID", b"T\0"), sub("FULL", b"What's your tattoo's story?\0"),
+                               sub("DATA", b"\x00\x00\x00\x00")])
+    tes4 = build_plugin()[:build_plugin().index(b"GRUP")]
+    pg = pl.Plugin(tes4 + grup([spel, dial], b"SPEL"))
+    units, warns = pl.extract_units(pg, "cp1252", "x")
+    assert not warns
+    assert [(u.kind, u.text) for u in units] == [
+        ("name:SPEL", "Calder's Vigor"),
+        ("description:SPEL", "Health regenerates 5% faster while Calder is following."),
+        ("dialogue_prompt:DIAL", "What's your tattoo's story?")]
+    # le frasi del giocatore non finiscono nella memoria dei termini
+    tr = Translator(lambda s, u: json.dumps([{"id": i["id"], "text": "IT " + i["text"]} for i in json.loads(u)]),
+                    "Italian")
+    tr.translate_all([(u.kind, u.text) for u in units])
+    assert "Calder's Vigor" in tr.terms and "What's your tattoo's story?" not in tr.terms
