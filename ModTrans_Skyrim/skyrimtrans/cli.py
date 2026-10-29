@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from .pipeline import LANGS, run
+from .pipeline import LANGS, check_writable_dir, clean_name, run
 from .translator import DEFAULT_MODEL, AnthropicBackend, OpenAICompatBackend, Translator
 
 
@@ -16,7 +16,10 @@ def main(argv=None, backend=None) -> int:
     ap.add_argument("mod", type=Path, help="cartella, .zip o .esp/.esm/.esl")
     ap.add_argument("-l", "--lang", required=True, choices=sorted(LANGS), help="lingua di destinazione")
     ap.add_argument("-s", "--source", default="english", choices=sorted(LANGS))
-    ap.add_argument("-o", "--output", type=Path, help="zip di output (default: <mod>_<lingua>.zip)")
+    ap.add_argument("-o", "--output", type=Path, help="percorso di output (default: <mod>_<lingua>.zip accanto alla mod)")
+    ap.add_argument("--out-dir", type=Path, help="cartella dove salvare il risultato (la crea se manca)")
+    ap.add_argument("--as-folder", action="store_true", help="salva una cartella pronta invece di uno zip")
+    ap.add_argument("--overwrite", action="store_true", help="sovrascrive se esiste già (di default sceglie un nome libero)")
     ap.add_argument("--provider", choices=["anthropic", "openai"], default="anthropic",
                     help="'openai' = qualsiasi API compatibile OpenAI (anche locale)")
     ap.add_argument("--model", help=f"default anthropic: {DEFAULT_MODEL}; per openai è obbligatorio")
@@ -33,7 +36,16 @@ def main(argv=None, backend=None) -> int:
     ap.add_argument("--report", type=Path, help="scrive il report in JSON")
     a = ap.parse_args(argv)
 
-    out = a.output or a.mod.with_name(f"{a.mod.stem}_{a.lang}.zip")
+    name = f"{clean_name(a.mod.name)}_{a.lang}" + ("" if a.as_folder else ".zip")
+    if a.output:
+        out = a.output
+    elif a.out_dir:
+        try:
+            out = check_writable_dir(a.out_dir) / name
+        except ValueError as e:
+            ap.error(str(e))
+    else:
+        out = a.mod.with_name(name)
     glossary = json.loads(a.glossary.read_text("utf-8")) if a.glossary else None
     if backend is None:
         if a.provider == "openai":
@@ -72,12 +84,12 @@ def main(argv=None, backend=None) -> int:
         print(f"Errore: {e}", file=sys.stderr)
         return 2
     try:
-        rep = run(a.mod, out, tr, a.lang, a.source, prog)
+        rep = run(a.mod, out, tr, a.lang, a.source, prog, a.as_folder, a.overwrite)
     except ValueError as e:
         print(f"\nErrore: {e}", file=sys.stderr)
         return 2
     print(file=sys.stderr)
-    print(f"Fatto: {out}")
+    print(f"Fatto: {rep.output}")
     print(f"  stringhe tradotte: {rep.translated} | lasciate originali: {rep.kept_original}")
     print(f"  file modificati/creati: {len(rep.files)}")
     for w in rep.warnings[:20]:
