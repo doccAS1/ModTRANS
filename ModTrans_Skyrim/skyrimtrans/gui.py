@@ -25,7 +25,7 @@ from .translator import (DEFAULT_MODEL, AbortRun, AnthropicBackend, OpenAICompat
 
 SETTINGS_FILE = Path.home() / ".skyrimtrans.json"
 SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items", "nexus_game",
-             "out_where", "out_dir", "out_mode", "use_memory")  # mai la chiave API
+             "out_where", "out_dir", "out_mode", "use_memory", "shorten", "review")  # mai la chiave API
 ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
 LANG_LABELS = {"english": "Inglese", "french": "Francese", "german": "Tedesco", "italian": "Italiano",
                "spanish": "Spagnolo", "russian": "Russo", "polish": "Polacco", "czech": "Ceco"}
@@ -176,7 +176,8 @@ def run_job(app: App, job: Job, s: dict) -> None:
         store = None if job.dry else store_for(s["lang"], f"{s['provider']}-{s.get('model') or DEFAULT_MODEL}", glossary)
         tr = Translator(backend, s["lang"].capitalize(), glossary,
                         batch_items=max(1, int(s.get("batch_items") or 40)),
-                        store=store, reuse_memory=s.get("use_memory", True))
+                        store=store, reuse_memory=s.get("use_memory", True),
+                        shorten=s.get("shorten", True), review=bool(s.get("review")))
 
         def heartbeat():
             if job.cancel.is_set():
@@ -200,7 +201,8 @@ def run_job(app: App, job: Job, s: dict) -> None:
         rep = run(src, dest, tr, s["lang"], s["source"], prog, as_folder=as_folder)
         job.report = {"translated": rep.translated, "kept_original": rep.kept_original,
                       "files": rep.files, "warnings": rep.warnings, "failures": rep.failures,
-                      "from_memory": rep.from_memory, "requests": rep.requests}
+                      "from_memory": rep.from_memory, "requests": rep.requests,
+                      "shortened": rep.shortened, "qa_checked": rep.qa_checked, "qa_fixed": rep.qa_fixed}
         if out_dir:
             job.saved_to = rep.output
             app.outputs.add(str(Path(rep.output).resolve()))

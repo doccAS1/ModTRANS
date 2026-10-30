@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .protect import Protected, ProtectionError, protect, restore
+from . import checks
+from .protect import Protected, ProtectionError, protect, remask, restore
 from .tables import KIND_HINTS, RTYPE_NAMES
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -129,11 +130,35 @@ class OpenAICompatBackend:
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
 
 
-def _parse_reply(reply: str) -> dict[int, str]:
+def _parse_list(reply: str) -> list[dict]:
     m = re.search(r"\[.*\]", reply, re.DOTALL)
     if not m:
         raise ValueError("risposta senza JSON")
-    return {int(o["id"]): o["text"] for o in json.loads(m.group(0))}
+    return json.loads(m.group(0))
+
+
+def _parse_reply(reply: str) -> dict[int, str]:
+    return {int(o["id"]): o["text"] for o in _parse_list(reply)}
+
+
+SHORTEN_SYSTEM = (
+    "You shorten {lang} translations of Skyrim UI texts (item names, menu entries, buttons, dialogue choices) "
+    "that are too long for the space available.\n"
+    "For each item you get the original, the current translation and max_chars. Rewrite the translation so it is "
+    "at most max_chars characters (shorter is better), keeping the meaning and the register. Markers like <x0/>, "
+    "<x1/> stand for protected formatting: copy them exactly, the same number of times. Keep proper nouns "
+    "consistent with the glossary if given. Do not add quotes or notes.\n"
+    "Reply ONLY with a JSON array of {{\"id\", \"text\"}}.{glossary}")
+
+REVIEW_SYSTEM = (
+    "You review {lang} translations of Skyrim mod strings. For each item you get the kind of text, the original "
+    "and its translation. Markers like <x0/> are protected formatting and must stay as they are.\n"
+    "Mark an item as not ok ONLY for a clear problem: the meaning is wrong or incomplete, part of the text was "
+    "left untranslated by mistake, the register does not fit the kind of text (for example a spoken line that "
+    "reads like a manual), a game term clashes with the glossary, or the sentence is awkward enough that a native "
+    "player would notice. Do NOT change style preferences, synonyms or punctuation.\n"
+    "Reply ONLY with a JSON array with one object per item: {{\"id\": <number>, \"ok\": true}} or "
+    "{{\"id\": <number>, \"ok\": false, \"fix\": \"<the corrected translation, with the same markers>\"}}.{glossary}")
 
 
 # ------------------------------------------------------------------ memoria su disco
@@ -217,11 +242,14 @@ class Translator:
                  glossary: dict[str, str] | None = None, batch_chars: int = 6000,
                  batch_items: int = 40, retries: int = 2, net_retries: int = 5,
                  max_failed_batches: int = 3, store: TranslationStore | None = None,
-                 reuse_memory: bool = True, sleep: Callable[[float], None] = time.sleep):
+                 reuse_memory: bool = True, sleep: Callable[[float], None] = time.sleep,
+                 shorten: bool = True, review: bool = False):
         gl = ""
         if glossary:
             gl = "\nGlossary (use these translations exactly):\n" + "\n".join(
                 f"- {k} => {v}" for k, v in glossary.items())
+        self.language, self._gl = language, gl
+        self.shorten, self.review = shorten, review
         self._base_system = SYSTEM.format(lang=language, glossary=gl)
         self.system = self._base_system
         self.brief = ""
@@ -233,7 +261,9 @@ class Translator:
         self.on_wait: Callable[[float, str], None] = lambda s, why: None
         self.cache: dict[tuple[str, str], str] = {}
         self.failed: dict[tuple[str, str], str] = {}
-        self.stats = {"requests": 0, "retries": 0, "from_memory": 0}
+        self.stats = {"requests": 0, "retries": 0, "from_memory": 0, "shortened": 0, "qa_checked": 0, "qa_fixed": 0}
+        self.warnings: list[str] = []                   # problemi non gravi: la traduzione c'è ma va guardata
+        self._fresh: dict[tuple[str, str], str] = {}    # tradotte in questa esecuzione: testo con segnaposto
         self._failed_batches = 0
         self._memory: dict[tuple[str, str], str] | None = None
         # Memoria dei nomi già tradotti in questa mod (nome originale -> traduzione):
@@ -287,6 +317,7 @@ class Translator:
             else:
                 todo[key] = p
         # prima i nomi: così i loro termini sono già noti quando si traducono descrizioni, libri e dialoghi
+        self._fresh = {}
         keys = sorted(todo, key=lambda k: _base(k[0]) not in NAME_KINDS)
         done = 0
         i = 0
@@ -302,7 +333,100 @@ class Translator:
             done += len(batch)
             if progress:
                 progress(done, len(keys))
+        if self.shorten:
+            self._shorten(todo, fit)
+        if self.review:
+            self._review(todo, fit)
+        if self.store:
+            self.store.flush()
         return {k: v for k, v in self.cache.items() if k in set(items)}
+
+    # -- controlli e rifiniture facoltative (se falliscono, la traduzione già accettata resta com'è)
+    def _warn(self, key: tuple[str, str], msg: str) -> None:
+        self.warnings.append(f"{_base(key[0])} «{key[1][:50].strip()}»: {msg}")
+
+    def _aux_system(self, template: str) -> str:
+        s = template.format(lang=self.language, glossary=self._gl)
+        return s + (BRIEF_HEADER + self.brief + "\n</mod_context>" if self.brief else "")
+
+    def _aux_call(self, system: str, items: list[dict]) -> list[dict] | None:
+        self.heartbeat()
+        try:
+            reply = self.backend(system, json.dumps(items, ensure_ascii=False))
+            self.stats["requests"] += 1
+            return _parse_list(reply)
+        except BackendError as e:
+            if e.fatal:
+                raise AbortRun(f"Il servizio AI ha rifiutato la richiesta: {e}") from None
+            self.warnings.append(f"passaggio di rifinitura saltato: {e}")
+        except Exception as e:  # noqa: BLE001 - JSON rovinato: la rifinitura è facoltativa
+            self.warnings.append(f"passaggio di rifinitura saltato: risposta non valida ({e})")
+        return None
+
+    def _apply_fix(self, k, todo, new, fit) -> str | None:
+        """Convalida un testo proposto in una rifinitura e lo sostituisce a quello attuale. Ritorna il motivo se scartato."""
+        try:
+            masked_new = str(new).strip()
+            restored = restore(todo[k], new)
+            bad = checks.hard_check(_base(k[0]), todo[k].masked, masked_new)
+            if bad:
+                return bad
+            out = fit(restored)
+        except ProtectionError as e:
+            return str(e)
+        self.cache[k] = out
+        self._fresh[k] = masked_new
+        self._remember(k, out)
+        if self.store:
+            self.store.add(k, out)                        # l'ultima occorrenza vince
+        return None
+
+    def _shorten(self, todo, fit) -> None:
+        long = [k for k, m in self._fresh.items() if checks.too_long(_base(k[0]), todo[k].masked, m)]
+        for i in range(0, len(long), 30):
+            chunk = long[i:i + 30]
+            got = self._aux_call(self._aux_system(SHORTEN_SYSTEM), [
+                {"id": n, "original": todo[k].masked, "current": self._fresh[k], "max_chars": checks.max_chars(todo[k].masked)}
+                for n, k in enumerate(chunk)])
+            answers = {}
+            for o in got or []:
+                try:
+                    answers[int(o["id"])] = o["text"]
+                except (KeyError, ValueError, TypeError):
+                    pass
+            for n, k in enumerate(chunk):
+                cur = self._fresh[k]
+                new = answers.get(n)
+                if new is not None and len(str(new).strip()) < len(cur) and self._apply_fix(k, todo, new, fit) is None:
+                    self.stats["shortened"] += 1
+                if checks.too_long(_base(k[0]), todo[k].masked, self._fresh[k]):
+                    self._warn(k, f"più lunga dell'originale ({len(todo[k].masked)} → {len(self._fresh[k])} caratteri): "
+                                  "potrebbe non entrare nell'interfaccia")
+
+    def _review(self, todo, fit) -> None:
+        keys = list(self._fresh)
+        for i in range(0, len(keys), 30):
+            chunk = keys[i:i + 30]
+            got = self._aux_call(self._aux_system(REVIEW_SYSTEM), [
+                {"id": n, "kind": _hint(k[0]), "original": todo[k].masked, "translation": self._fresh[k]}
+                for n, k in enumerate(chunk)])
+            if got is None:
+                continue
+            seen = set()
+            for o in got:
+                try:
+                    n = int(o["id"])
+                    k = chunk[n]
+                except (KeyError, ValueError, TypeError, IndexError):
+                    continue
+                seen.add(n)
+                if o.get("ok") is False and isinstance(o.get("fix"), str) and o["fix"].strip():
+                    why = self._apply_fix(k, todo, o["fix"], fit)
+                    if why is None:
+                        self.stats["qa_fixed"] += 1
+                    else:
+                        self._warn(k, f"la revisione suggeriva una correzione, scartata ({why})")
+            self.stats["qa_checked"] += len(seen)
 
     def _accept(self, key: tuple[str, str], out: str) -> None:
         self.cache[key] = out
@@ -349,8 +473,16 @@ class Translator:
                 try:
                     if n not in got:
                         raise ProtectionError(missing)
-                    out = fit(restore(todo[k], got[n]))
+                    base, masked_out = _base(k[0]), str(got[n]).strip()
+                    restored = restore(todo[k], got[n])
+                    bad = checks.hard_check(base, todo[k].masked, masked_out)
+                    if bad:
+                        raise ProtectionError(bad)
+                    out = fit(restored)
                     self._accept(k, out)
+                    self._fresh[k] = masked_out
+                    if checks.looks_untranslated(base, todo[k].masked, masked_out):
+                        self._warn(k, "identica all'originale (forse lasciata in inglese)")
                     accepted += 1
                 except ProtectionError as e:
                     reasons[k] = str(e)

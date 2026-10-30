@@ -74,6 +74,28 @@ def protect(text: str) -> Protected:
     return Protected(lead=lead, trail=trail, masked=masked, tokens=tokens)
 
 
+def remask(p: Protected, text: str) -> str | None:
+    """Rimette i segnaposto <xN/> in un testo già ripristinato, con la numerazione della sorgente.
+
+    Serve a ridare al modello (revisione) un testo con gli stessi segnaposto dell'originale.
+    Ritorna None se i segnaposto del testo non corrispondono a quelli della sorgente."""
+    free: dict[str, list[int]] = {}
+    for i, t in enumerate(p.tokens):
+        free.setdefault(t, []).append(i)
+    ok = True
+
+    def _sub(m: re.Match) -> str:
+        nonlocal ok
+        idx = free.get(m.group(0))
+        if not idx:
+            ok = False
+            return m.group(0)
+        return f"<x{idx.pop(0)}/>"
+
+    masked = _PROTECT_RE.sub(_sub, text.strip())
+    return masked if ok and not any(free.values()) else None
+
+
 def restore(p: Protected, translated: str) -> str:
     if not isinstance(translated, str) or not translated.strip():
         raise ProtectionError("traduzione vuota")

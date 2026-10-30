@@ -35,6 +35,9 @@ class Report:
     output: str = ""   # percorso finale del risultato (zip o cartella)
     from_memory: int = 0   # stringhe riprese dalla memoria delle traduzioni (nessuna richiesta)
     requests: int = 0      # richieste fatte al servizio AI
+    shortened: int = 0     # testi d'interfaccia accorciati perché troppo lunghi
+    qa_checked: int = 0    # stringhe riviste dal secondo passaggio (--review)
+    qa_fixed: int = 0      # stringhe corrette dalla revisione
 
 
 def safe_extract(zip_path: Path, dest: Path) -> None:
@@ -239,9 +242,9 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
         def lookup(u: Unit):
             t = results.get((u.kind, u.text))
             if t is None:
-                rep.kept_original += 1
                 why = translator.failed.get((u.kind, u.text), "non tradotta")
                 if why not in ("vuota", "chiave di traduzione ($KEY)", "nessun testo da tradurre"):
+                    rep.kept_original += 1                 # le stringhe vuote/chiavi non sono "mancate": non c'era nulla da tradurre
                     rep.failures.append(f"{u.file} [{u.kind}] {u.text[:60]!r}: {why}")
             else:
                 rep.translated += 1
@@ -285,5 +288,7 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
             rep.files.append(rel)
 
         rep.from_memory, rep.requests = translator.stats["from_memory"], translator.stats["requests"]
+        rep.shortened, rep.qa_checked, rep.qa_fixed = (translator.stats[k] for k in ("shortened", "qa_checked", "qa_fixed"))
+        rep.warnings += [f"Controllo: {w}" for w in dict.fromkeys(translator.warnings)]
         rep.output = str(write_output(out, dest, as_folder, overwrite))
     return rep

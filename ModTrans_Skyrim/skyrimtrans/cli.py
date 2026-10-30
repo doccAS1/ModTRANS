@@ -30,6 +30,8 @@ def main(argv=None, backend=None) -> int:
     ap.add_argument("--batch-items", type=int, default=40, help="stringhe per richiesta (con modelli piccoli: 5-10)")
     ap.add_argument("--glossary", type=Path, help="JSON {termine: traduzione}")
     ap.add_argument("--fresh", action="store_true", help="ignora la memoria delle traduzioni (ritraduce tutto; i risultati la aggiornano)")
+    ap.add_argument("--review", action="store_true", help="dopo la traduzione, un secondo passaggio AI rilegge e corregge errori evidenti (più richieste)")
+    ap.add_argument("--no-shorten", action="store_true", help="non accorciare i testi d'interfaccia molto più lunghi dell'originale")
     ap.add_argument("--no-memory", action="store_true", help="non legge né scrive la memoria delle traduzioni su disco")
     ap.add_argument("--brief", help="contesto sulla mod dato al modello (testo)")
     ap.add_argument("--brief-file", type=Path, help="come --brief, da file di testo")
@@ -64,7 +66,7 @@ def main(argv=None, backend=None) -> int:
     profile = f"{a.provider}-{a.model or (DEFAULT_MODEL if a.provider == 'anthropic' else 'x')}"
     store = None if a.no_memory else store_for(a.lang, profile, glossary)
     tr = Translator(backend, a.lang.capitalize(), glossary, batch_items=a.batch_items, store=store,
-                    reuse_memory=not a.fresh)
+                    reuse_memory=not a.fresh, shorten=not a.no_shorten, review=a.review)
 
     def prog(d, t):
         print(f"\r  tradotte {d}/{t}", end="", file=sys.stderr, flush=True)
@@ -98,6 +100,8 @@ def main(argv=None, backend=None) -> int:
     print(f"Fatto: {rep.output}")
     print(f"  stringhe tradotte: {rep.translated} (dalla memoria: {rep.from_memory}, richieste all'AI: {rep.requests})"
           f" | lasciate originali: {rep.kept_original}")
+    if rep.shortened or rep.qa_checked:
+        print(f"  qualità: accorciate {rep.shortened} | riviste {rep.qa_checked}, corrette {rep.qa_fixed}")
     if rep.failures:
         print("  Alcune stringhe non sono state tradotte: rilancia lo stesso comando per riprovare solo quelle.")
     print(f"  file modificati/creati: {len(rep.files)}")
