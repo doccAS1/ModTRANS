@@ -33,6 +33,8 @@ class Report:
     warnings: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     output: str = ""   # percorso finale del risultato (zip o cartella)
+    from_memory: int = 0   # stringhe riprese dalla memoria delle traduzioni (nessuna richiesta)
+    requests: int = 0      # richieste fatte al servizio AI
 
 
 def safe_extract(zip_path: Path, dest: Path) -> None:
@@ -233,5 +235,6 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                 rel = newrel
             rep.files.append(rel)
 
+        rep.from_memory, rep.requests = translator.stats["from_memory"], translator.stats["requests"]
         rep.output = str(write_output(out, dest, as_folder, overwrite))
     return rep

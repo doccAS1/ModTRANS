@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 from .pipeline import LANGS, check_writable_dir, clean_name, run
-from .translator import DEFAULT_MODEL, AnthropicBackend, OpenAICompatBackend, Translator
+from .translator import (DEFAULT_MODEL, AbortRun, AnthropicBackend, OpenAICompatBackend, Translator,
+                         store_for)
 
 
 def main(argv=None, backend=None) -> int:
@@ -28,6 +29,8 @@ def main(argv=None, backend=None) -> int:
     ap.add_argument("--api-key", default=None, help="altrimenti OPENAI_API_KEY / ANTHROPIC_API_KEY")
     ap.add_argument("--batch-items", type=int, default=40, help="stringhe per richiesta (con modelli piccoli: 5-10)")
     ap.add_argument("--glossary", type=Path, help="JSON {termine: traduzione}")
+    ap.add_argument("--fresh", action="store_true", help="ignora la memoria delle traduzioni (ritraduce tutto; i risultati la aggiornano)")
+    ap.add_argument("--no-memory", action="store_true", help="non legge né scrive la memoria delle traduzioni su disco")
     ap.add_argument("--brief", help="contesto sulla mod dato al modello (testo)")
     ap.add_argument("--brief-file", type=Path, help="come --brief, da file di testo")
     ap.add_argument("--nexus", help="ID o link Nexus Mods della mod, oppure 'auto' (ID dal nome del file)")
@@ -58,7 +61,10 @@ def main(argv=None, backend=None) -> int:
                 backend = AnthropicBackend(a.model or DEFAULT_MODEL, a.api_key)
             except ImportError:
                 ap.error("manca la libreria: pip install anthropic (oppure usa --provider openai)")
-    tr = Translator(backend, a.lang.capitalize(), glossary, batch_items=a.batch_items)
+    profile = f"{a.provider}-{a.model or (DEFAULT_MODEL if a.provider == 'anthropic' else 'x')}"
+    store = None if a.no_memory else store_for(a.lang, profile, glossary)
+    tr = Translator(backend, a.lang.capitalize(), glossary, batch_items=a.batch_items, store=store,
+                    reuse_memory=not a.fresh)
 
     def prog(d, t):
         print(f"\r  tradotte {d}/{t}", end="", file=sys.stderr, flush=True)
@@ -85,12 +91,15 @@ def main(argv=None, backend=None) -> int:
         return 2
     try:
         rep = run(a.mod, out, tr, a.lang, a.source, prog, a.as_folder, a.overwrite)
-    except ValueError as e:
+    except (ValueError, AbortRun) as e:
         print(f"\nErrore: {e}", file=sys.stderr)
         return 2
     print(file=sys.stderr)
     print(f"Fatto: {rep.output}")
-    print(f"  stringhe tradotte: {rep.translated} | lasciate originali: {rep.kept_original}")
+    print(f"  stringhe tradotte: {rep.translated} (dalla memoria: {rep.from_memory}, richieste all'AI: {rep.requests})"
+          f" | lasciate originali: {rep.kept_original}")
+    if rep.failures:
+        print("  Alcune stringhe non sono state tradotte: rilancia lo stesso comando per riprovare solo quelle.")
     print(f"  file modificati/creati: {len(rep.files)}")
     for w in rep.warnings[:20]:
         print(f"  ! {w}")

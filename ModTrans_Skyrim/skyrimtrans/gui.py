@@ -20,11 +20,12 @@ from urllib.parse import parse_qs, urlparse
 from . import context as ctx
 from .gui_page import PAGE
 from .pipeline import LANGS, OutputError, check_writable_dir, clean_name, run
-from .translator import DEFAULT_MODEL, AnthropicBackend, OpenAICompatBackend, Translator
+from .translator import (DEFAULT_MODEL, AbortRun, AnthropicBackend, OpenAICompatBackend, Translator,
+                         clear_memory, memory_info, store_for)
 
 SETTINGS_FILE = Path.home() / ".skyrimtrans.json"
 SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items", "nexus_game",
-             "out_where", "out_dir", "out_mode")  # mai la chiave API
+             "out_where", "out_dir", "out_mode", "use_memory")  # mai la chiave API
 ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
 LANG_LABELS = {"english": "Inglese", "french": "Francese", "german": "Tedesco", "italian": "Italiano",
                "spanish": "Spagnolo", "russian": "Russo", "polish": "Polacco", "czech": "Ceco"}
@@ -172,30 +173,47 @@ def run_job(app: App, job: Job, s: dict) -> None:
                 hint = ("Controlla che il server sia acceso e l'indirizzo giusto."
                         if s["provider"] == "openai" else "Controlla la chiave API.")
                 raise RuntimeError(f"Connessione al servizio AI non riuscita. {hint} Dettaglio: {e}") from None
+        store = None if job.dry else store_for(s["lang"], f"{s['provider']}-{s.get('model') or DEFAULT_MODEL}", glossary)
         tr = Translator(backend, s["lang"].capitalize(), glossary,
-                        batch_items=max(1, int(s.get("batch_items") or 40)))
+                        batch_items=max(1, int(s.get("batch_items") or 40)),
+                        store=store, reuse_memory=s.get("use_memory", True))
+
+        def heartbeat():
+            if job.cancel.is_set():
+                raise Cancelled()
+
+        def on_wait(seconds, why):
+            job.phase = f"Attendo il servizio AI ({int(seconds)} s)"
+            job.log.append(f"{why}. Riprovo tra {int(seconds)} secondi...")
+
+        tr.heartbeat, tr.on_wait = heartbeat, on_wait
         if (s.get("brief") or "").strip():
             tr.set_brief(s["brief"])  # contesto scritto/corretto dall'utente
 
         def prog(d, t):
-            if job.cancel.is_set():
-                raise Cancelled()
+            heartbeat()
             job.done, job.total = d, t
+            job.phase = "Analisi e traduzione"
 
         job.phase = "Analisi e traduzione"
         job.log.append("Analisi del file e traduzione...")
         rep = run(src, dest, tr, s["lang"], s["source"], prog, as_folder=as_folder)
         job.report = {"translated": rep.translated, "kept_original": rep.kept_original,
-                      "files": rep.files, "warnings": rep.warnings, "failures": rep.failures}
+                      "files": rep.files, "warnings": rep.warnings, "failures": rep.failures,
+                      "from_memory": rep.from_memory, "requests": rep.requests}
         if out_dir:
             job.saved_to = rep.output
             app.outputs.add(str(Path(rep.output).resolve()))
         job.log.append(f"Trovate {rep.translated} stringhe traducibili." if job.dry
-                       else f"Fatto: {rep.translated} stringhe tradotte, {len(rep.files)} file prodotti.")
+                       else f"Fatto: {rep.translated} stringhe ({rep.from_memory} dalla memoria, {rep.requests} richieste all'AI), "
+                            f"{len(rep.files)} file prodotti.")
         job.out = None if (job.dry or out_dir) else Path(rep.output)
         job.phase, job.state = "Completato", "done"
     except Cancelled:
         job.state, job.phase = "cancelled", "Annullato"
+    except AbortRun as e:
+        job.state, job.phase, job.error = "error", "Interrotto", str(e)
+        job.log.append(f"Interrotto: {e}")
     except Exception as e:  # noqa: BLE001 - qualunque errore va mostrato all'utente
         job.state, job.phase, job.error = "error", "Errore", f"{e}"
         job.log.append(f"Errore: {e}")
@@ -250,6 +268,8 @@ def make_handler(app: App, port_holder: list):
                 return
             if not self._auth(q):
                 return self._json({"error": "non autorizzato"}, 403)
+            if u.path == "/api/memory":
+                return self._json(memory_info())
             if u.path == "/api/browse":
                 return self._json(browse((q.get("path") or [""])[0]))
             m = re.fullmatch(r"/api/status/([0-9a-f]{32})", u.path)
@@ -319,6 +339,8 @@ def make_handler(app: App, port_holder: list):
                     save_settings(s)
                     threading.Thread(target=run_job, args=(app, job, s), daemon=True).start()
                     return self._json({"job_id": job.id})
+                if u.path == "/api/memory/clear":
+                    return self._json({"cleared": clear_memory()})
                 if u.path == "/api/mkdir":
                     b = self._body_json()
                     name = (b.get("name") or "").strip()
