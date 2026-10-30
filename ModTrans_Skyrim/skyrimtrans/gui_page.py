@@ -94,6 +94,7 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
     <div class="row" style="margin-top:10px">
       <div class="field"><label for="batch">Stringhe per richiesta</label><input type="number" id="batch" min="1" max="200"></div>
     </div>
+    <div class="field"><label class="check"><input type="checkbox" id="use_memory" checked><span>Usa la memoria delle traduzioni<small>Riprende da dove si era interrotto e riusa le traduzioni gi&agrave; fatte (stessa lingua e modello). <span id="memInfo"></span> <a href="#" id="memClear">Svuota la memoria</a></small></span></label></div>
     <div class="field"><label for="glossary">Glossario (JSON, facoltativo)</label><textarea id="glossary" placeholder='{"Dragonborn": "Sangue di Drago"}' spellcheck="false"></textarea></div>
   </details>
   <div class="field" style="margin-top:14px"><label for="out_where">Dove salvare il risultato</label>
@@ -238,13 +239,19 @@ $("#bNew").onclick=async()=>{
   try{ const j=await api("/api/mkdir",{method:"POST",body:JSON.stringify({path:bCur,name:n})}); loadDir(j.path) }catch(e){ $("#bErr").textContent=e.message }
 };
 
+/* ---- memoria ---- */
+$("#use_memory").checked=D.saved.use_memory!==false;
+async function memRefresh(){ try{ const m=await api("/api/memory"); $("#memInfo").textContent=m.entries?("Salvate "+m.entries+" traduzioni ("+(m.bytes/1048576).toFixed(1)+" MB)."):"Ancora vuota." }catch(e){} }
+memRefresh();
+$("#memClear").onclick=async e=>{ e.preventDefault(); if(!confirm("Cancellare tutte le traduzioni salvate? Dovranno essere rifatte (e ripagate) la prossima volta."))return; await api("/api/memory/clear",{method:"POST",body:"{}"}); memRefresh() };
+
 function setRunning(r){ $("#go").disabled=r||!uploadId; $("#stop").classList.toggle("hide",!r); }
 $("#go").onclick=async()=>{
   $("#msg").textContent=""; $("#result").classList.add("hide");
   const p=PRESETS[$("#preset").value];
   const s={upload_id:uploadId,lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
     model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim(),
-    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,glossary:$("#glossary").value.trim(),dry_run:$("#dry").checked};
+    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,glossary:$("#glossary").value.trim(),dry_run:$("#dry").checked};
   try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify(s)}); jobId=j.job_id; }
   catch(e){ $("#msg").textContent=e.message; return }
   setRunning(true); $("#progress").classList.remove("hide"); $("#log").textContent="";
@@ -264,12 +271,14 @@ function finish(j){
   const R=$("#result"); R.classList.remove("hide");
   $("#stats").innerHTML=""; $("#resAction").innerHTML=""; $("#warnBox").classList.add("hide"); $("#failBox").classList.add("hide"); $("#resNote").textContent="";
   if(j.state==="cancelled"){ $("#resTitle").textContent="Annullato"; $("#resNote").textContent="Nessun file prodotto."; return }
-  if(j.state==="error"){ $("#resTitle").textContent="Errore"; const p=document.createElement("p"); p.className="err"; p.textContent=j.error; $("#resAction").appendChild(p); return }
+  if(j.state==="error"){ $("#resTitle").textContent="Errore"; const p=document.createElement("p"); p.className="err"; p.textContent=j.error; $("#resAction").appendChild(p);
+    if(j.phase==="Interrotto"){ const b=document.createElement("button"); b.className="sec"; b.textContent="Riprendi"; b.onclick=()=>{ R.classList.add("hide"); $("#go").click() }; $("#resAction").appendChild(b) }
+    memRefresh(); return }
   const r=j.report;
   $("#resTitle").textContent=j.dry?"Analisi completata":"Traduzione completata";
   const stat=(n,l)=>{const d=document.createElement("div");const b=document.createElement("b");b.textContent=n;d.appendChild(b);d.appendChild(document.createTextNode(l));$("#stats").appendChild(d)};
   stat(r.translated,j.dry?"stringhe traducibili":"stringhe tradotte");
-  if(!j.dry){ stat(r.kept_original,"lasciate originali"); stat(r.files.length,"file modificati o creati"); }
+  if(!j.dry){ stat(r.kept_original,"lasciate originali"); stat(r.files.length,"file modificati o creati"); if(r.from_memory)stat(r.from_memory,"dalla memoria (gratis)"); }
   if(!j.dry && j.saved_to){
     const p=document.createElement("p"); p.style.margin="0 0 10px"; p.textContent="Salvato in: "+j.saved_to; $("#resAction").appendChild(p);
     const b=document.createElement("button"); b.textContent="Apri la cartella"; b.onclick=()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#resNote").textContent=e.message}); $("#resAction").appendChild(b);
@@ -279,7 +288,10 @@ function finish(j){
     $("#resNote").textContent="Fai una copia di sicurezza prima di installarla e controlla i termini del gioco: la lista dei campi e la verifica coprono la struttura, non la qualità della traduzione.";
   } else { $("#resNote").textContent="Nessuna chiamata AI e nessun file prodotto."; }
   if(r.warnings.length){ $("#warnBox").classList.remove("hide"); $("#warnSum").textContent="Avvisi ("+r.warnings.length+")"; li($("#warnList"),r.warnings,100) }
-  if(r.failures.length){ $("#failBox").classList.remove("hide"); $("#failSum").textContent="Stringhe non tradotte o rifiutate ("+r.failures.length+")"; li($("#failList"),r.failures,100) }
+  if(r.failures.length){ $("#failBox").classList.remove("hide"); $("#failSum").textContent="Stringhe non tradotte o rifiutate ("+r.failures.length+")"; li($("#failList"),r.failures,100);
+    if(!j.dry){ const b=document.createElement("button"); b.className="sec"; b.style.marginLeft="10px"; b.textContent="Riprova le fallite"; b.onclick=()=>{ R.classList.add("hide"); $("#go").click() }; $("#resAction").appendChild(b);
+      $("#resNote").textContent+=" Le gi\u00e0 tradotte sono in memoria: riprovando si rifanno solo quelle fallite." } }
+  memRefresh();
 }
 </script>
 </body>
