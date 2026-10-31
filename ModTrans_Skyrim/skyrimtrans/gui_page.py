@@ -97,6 +97,7 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
     <div class="field"><label class="check"><input type="checkbox" id="shorten" checked><span>Accorcia i testi troppo lunghi<small>Nomi, pulsanti e scelte di dialogo che superano molto la lunghezza originale vengono riscritti pi&ugrave; brevi (una richiesta in pi&ugrave; solo se serve).</small></span></label></div>
     <div class="field"><label class="check"><input type="checkbox" id="review"><span>Revisione finale con l&rsquo;AI<small>Un secondo passaggio rilegge le traduzioni e corregge errori evidenti. Costa circa una richiesta in pi&ugrave; ogni 30 stringhe.</small></span></label></div>
     <div class="field"><label class="check"><input type="checkbox" id="use_memory" checked><span>Usa la memoria delle traduzioni<small>Riprende da dove si era interrotto e riusa le traduzioni gi&agrave; fatte (stessa lingua e modello). <span id="memInfo"></span> <a href="#" id="memClear">Svuota la memoria</a></small></span></label></div>
+    <div class="field"><label for="game_data">Nomi ufficiali del gioco (facoltativo)</label><input id="game_data" type="text" placeholder="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Skyrim Special Edition\\Data" spellcheck="false"><small class="hint">Cartella Data di Skyrim in italiano: il programma accoppia i testi inglesi e italiani del gioco e li usa come glossario ufficiale. Viene ricordato solo il percorso.</small></div>
     <div class="field"><label for="glossary">Glossario (JSON, facoltativo)</label><textarea id="glossary" placeholder='{"Dragonborn": "Sangue di Drago"}' spellcheck="false"></textarea></div>
   </details>
   <div class="field" style="margin-top:14px"><label for="out_where">Dove salvare il risultato</label>
@@ -242,7 +243,7 @@ $("#bNew").onclick=async()=>{
 };
 
 /* ---- memoria ---- */
-$("#use_memory").checked=D.saved.use_memory!==false; $("#shorten").checked=D.saved.shorten!==false; $("#review").checked=!!D.saved.review;
+$("#use_memory").checked=D.saved.use_memory!==false; $("#shorten").checked=D.saved.shorten!==false; $("#game_data").value=D.saved.game_data||""; $("#review").checked=!!D.saved.review;
 async function memRefresh(){ try{ const m=await api("/api/memory"); $("#memInfo").textContent=m.entries?("Salvate "+m.entries+" traduzioni ("+(m.bytes/1048576).toFixed(1)+" MB)."):"Ancora vuota." }catch(e){} }
 memRefresh();
 $("#memClear").onclick=async e=>{ e.preventDefault(); if(!confirm("Cancellare tutte le traduzioni salvate? Dovranno essere rifatte (e ripagate) la prossima volta."))return; await api("/api/memory/clear",{method:"POST",body:"{}"}); memRefresh() };
@@ -253,7 +254,7 @@ $("#go").onclick=async()=>{
   const p=PRESETS[$("#preset").value];
   const s={upload_id:uploadId,lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
     model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim(),
-    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,shorten:$("#shorten").checked,review:$("#review").checked,glossary:$("#glossary").value.trim(),dry_run:$("#dry").checked};
+    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,shorten:$("#shorten").checked,review:$("#review").checked,glossary:$("#glossary").value.trim(),game_data:$("#game_data").value.trim(),dry_run:$("#dry").checked};
   try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify(s)}); jobId=j.job_id; }
   catch(e){ $("#msg").textContent=e.message; return }
   setRunning(true); $("#progress").classList.remove("hide"); $("#log").textContent="";

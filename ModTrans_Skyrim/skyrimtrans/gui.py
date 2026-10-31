@@ -25,7 +25,7 @@ from .translator import (DEFAULT_MODEL, AbortRun, AnthropicBackend, OpenAICompat
 
 SETTINGS_FILE = Path.home() / ".skyrimtrans.json"
 SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items", "nexus_game",
-             "out_where", "out_dir", "out_mode", "use_memory", "shorten", "review")  # mai la chiave API
+             "out_where", "out_dir", "out_mode", "use_memory", "shorten", "review", "game_data")  # mai la chiave API
 ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
 LANG_LABELS = {"english": "Inglese", "french": "Francese", "german": "Tedesco", "italian": "Italiano",
                "spanish": "Spagnolo", "russian": "Russo", "polish": "Polacco", "czech": "Ceco"}
@@ -161,6 +161,14 @@ def run_job(app: App, job: Job, s: dict) -> None:
                 assert isinstance(glossary, dict)
             except Exception:
                 raise ValueError("Il glossario non è un JSON valido (serve un oggetto {\"termine\": \"traduzione\"})")
+        game_gl = None
+        if (s.get("game_data") or "").strip():
+            job.phase = "Leggo i nomi ufficiali del gioco"
+            job.log.append("Costruisco il glossario ufficiale dai file del gioco...")
+            from .glossary import build_glossary
+            game_gl, ginfo = build_glossary(Path(s["game_data"].strip()), s["source"], s["lang"],
+                                            LANGS[s["source"]][1], LANGS[s["lang"]][1])
+            job.log.append(f"Glossario ufficiale: {ginfo['terms']} termini da {len(ginfo['used'])} file.")
         if job.dry:
             backend = lambda _sys, u: json.dumps([{"id": i["id"], "text": i["text"]} for i in json.loads(u)])
         else:
@@ -173,11 +181,11 @@ def run_job(app: App, job: Job, s: dict) -> None:
                 hint = ("Controlla che il server sia acceso e l'indirizzo giusto."
                         if s["provider"] == "openai" else "Controlla la chiave API.")
                 raise RuntimeError(f"Connessione al servizio AI non riuscita. {hint} Dettaglio: {e}") from None
-        store = None if job.dry else store_for(s["lang"], f"{s['provider']}-{s.get('model') or DEFAULT_MODEL}", glossary)
+        store = None if job.dry else store_for(s["lang"], f"{s['provider']}-{s.get('model') or DEFAULT_MODEL}", {**(game_gl or {}), **(glossary or {})} or None)
         tr = Translator(backend, s["lang"].capitalize(), glossary,
                         batch_items=max(1, int(s.get("batch_items") or 40)),
                         store=store, reuse_memory=s.get("use_memory", True),
-                        shorten=s.get("shorten", True), review=bool(s.get("review")))
+                        shorten=s.get("shorten", True), review=bool(s.get("review")), game_glossary=game_gl)
 
         def heartbeat():
             if job.cancel.is_set():
