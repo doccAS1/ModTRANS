@@ -78,6 +78,18 @@ Il modello riceve, oltre alle stringhe, un breve contesto sulla mod e il tipo di
 2. **Facoltativo, Nexus Mods:** inserisci il link o l'ID della mod (viene proposto quello nel nome del file scaricato) e la tua chiave API personale (gratuita: Nexus → Account → API). Si usa l'API ufficiale; la chiave non viene salvata. Da riga di comando: `--nexus auto --nexus-key ...` (o `NEXUS_API_KEY`).
 3. **Riassunto:** con i dati di Nexus il modello scrive un riassunto di massimo 120 parole, che nell'interfaccia puoi correggere prima di tradurre (o passare tu con `--brief` / `--brief-file`). Il testo preso dal web è trattato come dato, mai come istruzione.
 
+## Glossario ufficiale dal gioco
+I nomi di armi, luoghi, incantesimi, fazioni e creature hanno già una traduzione ufficiale: sta nei file del gioco. Il programma la ricava accoppiando, per ID, `Skyrim_english.STRINGS` e `Skyrim_italian.STRINGS` (e quelli di Dawnguard, Dragonborn, Hearthfire), sia sciolti in `Data/Strings` sia dentro i `.bsa`. Serve Skyrim installato nella lingua di destinazione.
+```bash
+python -m skyrimtrans glossario "C:\...\Skyrim Special Edition\Data" -l italian   # crea glossario_italian.json
+python -m skyrimtrans MiaMod.zip -l italian --game-glossary glossario_italian.json
+python -m skyrimtrans MiaMod.zip -l italian --game-data "C:\...\Data"              # lo costruisce al volo
+```
+Nell'interfaccia: campo "Nomi ufficiali del gioco" con la cartella Data. Il glossario si costruisce sul tuo PC dai tuoi file: nessun testo del gioco è incluso nel programma.
+- Entra solo ciò che il modello non sa già. Tolgo le traduzioni ovvie: le parole comuni con una sola parola per lato (`Gold → Oro`: «gold» compare in minuscolo spesso nei testi del gioco) e i nomi composti alla lettera (`Iron Sword → Spada di Ferro`, quando ogni parola ha già la sua traduzione nel gioco). Restano i nomi particolari (`Dragonborn → Sangue di Drago`) e, nel dubbio, tutto ciò che non so classificare.
+- Entrano solo nomi (1-6 parole, iniziale maiuscola, senza tag). Restano fuori le frasi, i nomi uguali in entrambe le lingue e quelli con più traduzioni diverse nel gioco (si tiene quella usata più spesso se prevale).
+- Il glossario è grande, quindi a ogni richiesta il modello riceve **solo i termini presenti in quel lotto**. Il tuo `--glossary` resta sempre intero nel prompt e ha la precedenza.
+
 ## Coerenza dei termini
 I nomi (armi, oggetti, luoghi...) vengono tradotti per primi e ricordati: quando lo stesso nome compare in un testo successivo (descrizioni, libri, dialoghi, quest, MCM), la traduzione già scelta viene ripassata al modello, anche se il testo cade in un altro lotto. Il glossario dell'utente ha sempre la precedenza.
 

@@ -47,6 +47,10 @@ def _hint(kind: str) -> str:
     return f"{h} (it belongs to a {RTYPE_NAMES.get(rt, rt)} record)" if rt else h
 
 MIN_TERM, MAX_TERM, MAX_TERMS_PER_BATCH = 4, 60, 40
+GAME_TERMS_HEADER = (
+    "\n\nOfficial {lang} names from the game's own localization. When one of these terms (same spelling) appears "
+    "in a text as a name of an item, place, creature, spell or the like, use this translation EXACTLY. "
+    "Ignore an entry if the words are used as ordinary vocabulary rather than as that name:\n")
 TERMS_HEADER = (
     "\n\nTerms already translated earlier in this same mod. When one of these names appears in a text "
     "(same spelling), reuse its translation EXACTLY so the mod stays consistent. "
@@ -243,11 +247,19 @@ class Translator:
                  batch_items: int = 40, retries: int = 2, net_retries: int = 5,
                  max_failed_batches: int = 3, store: TranslationStore | None = None,
                  reuse_memory: bool = True, sleep: Callable[[float], None] = time.sleep,
-                 shorten: bool = True, review: bool = False):
+                 shorten: bool = True, review: bool = False, game_glossary: dict[str, str] | None = None):
         gl = ""
-        if glossary:
+        self._big: dict[str, list[str]] = {}               # glossario grande: indice prima parola -> termini
+        self._big_map: dict[str, str] = {}
+        if glossary:                                         # glossario dell'utente: sempre nel prompt, ha la precedenza
             gl = "\nGlossary (use these translations exactly):\n" + "\n".join(
                 f"- {k} => {v}" for k, v in glossary.items())
+        if game_glossary:                                    # nomi ufficiali del gioco: troppi per il prompt, si danno solo quelli del lotto
+            self._big_map = {k: v for k, v in game_glossary.items() if k not in (glossary or {})}
+            for term in self._big_map:
+                m = re.match(r"\w+", term)
+                if m:
+                    self._big.setdefault(m.group(0), []).append(term)
         self.language, self._gl = language, gl
         self.shorten, self.review = shorten, review
         self._base_system = SYSTEM.format(lang=language, glossary=gl)
@@ -279,6 +291,17 @@ class Translator:
         kind, text = key
         if _base(kind) in NAME_KINDS and MIN_TERM <= len(text) <= MAX_TERM and "<" not in text and "<" not in out:
             self.terms[text] = out
+
+    def _glossary_for(self, masked_texts: list[str]) -> dict[str, str]:
+        if not self._big_map:
+            return {}
+        blob = "\n".join(masked_texts)
+        hits = {}
+        for w in set(re.findall(r"\w+", blob)):
+            for term in self._big.get(w, ()):
+                if re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", blob):
+                    hits[term] = self._big_map[term]
+        return dict(sorted(hits.items(), key=lambda kv: -len(kv[0]))[:MAX_TERMS_PER_BATCH])
 
     def _terms_for(self, masked_texts: list[str]) -> dict[str, str]:
         """Termini già tradotti che compaiono (maiuscole incluse) nei testi del lotto."""
@@ -445,7 +468,10 @@ class Translator:
                 [{"id": n, "kind": _hint(k[0]), "text": todo[k].masked}
                  for n, k in enumerate(pending)], ensure_ascii=False)
             system = self.system
-            terms = self._terms_for([todo[k].masked for k in pending])
+            gloss = self._glossary_for([todo[k].masked for k in pending])
+            if gloss:
+                system += GAME_TERMS_HEADER.format(lang=self.language) + "\n".join(f"- {a} => {b}" for a, b in gloss.items())
+            terms = {a: b for a, b in self._terms_for([todo[k].masked for k in pending]).items() if a not in gloss}
             if terms:
                 system += TERMS_HEADER + "\n".join(f"- {a} => {b}" for a, b in terms.items())
             try:
