@@ -86,6 +86,7 @@ python -m skyrimtrans MiaMod.zip -l italian --game-glossary glossario_italian.js
 python -m skyrimtrans MiaMod.zip -l italian --game-data "C:\...\Data"              # lo costruisce al volo
 ```
 Nell'interfaccia: campo "Nomi ufficiali del gioco" con la cartella Data. Il glossario si costruisce sul tuo PC dai tuoi file: nessun testo del gioco è incluso nel programma.
+- Entra solo ciò che il modello non sa già. Tolgo le traduzioni ovvie: le parole comuni con una sola parola per lato (`Gold → Oro`: «gold» compare in minuscolo spesso nei testi del gioco) e i nomi composti alla lettera (`Iron Sword → Spada di Ferro`, quando ogni parola ha già la sua traduzione nel gioco). Restano i nomi particolari (`Dragonborn → Sangue di Drago`) e, nel dubbio, tutto ciò che non so classificare.
 - Entrano solo nomi (1-6 parole, iniziale maiuscola, senza tag). Restano fuori le frasi, i nomi uguali in entrambe le lingue e quelli con più traduzioni diverse nel gioco (si tiene quella usata più spesso se prevale).
 - Il glossario è grande, quindi a ogni richiesta il modello riceve **solo i termini presenti in quel lotto**. Il tuo `--glossary` resta sempre intero nel prompt e ha la precedenza.
 
