@@ -94,8 +94,22 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
     <div class="row" style="margin-top:10px">
       <div class="field"><label for="batch">Stringhe per richiesta</label><input type="number" id="batch" min="1" max="200"></div>
     </div>
+    <div class="field"><label class="check"><input type="checkbox" id="shorten" checked><span>Accorcia i testi troppo lunghi<small>Nomi, pulsanti e scelte di dialogo che superano molto la lunghezza originale vengono riscritti pi&ugrave; brevi (una richiesta in pi&ugrave; solo se serve).</small></span></label></div>
+    <div class="field"><label class="check"><input type="checkbox" id="review"><span>Revisione finale con l&rsquo;AI<small>Un secondo passaggio rilegge le traduzioni e corregge errori evidenti. Costa circa una richiesta in pi&ugrave; ogni 30 stringhe.</small></span></label></div>
+    <div class="field"><label class="check"><input type="checkbox" id="use_memory" checked><span>Usa la memoria delle traduzioni<small>Riprende da dove si era interrotto e riusa le traduzioni gi&agrave; fatte (stessa lingua e modello). <span id="memInfo"></span> <a href="#" id="memClear">Svuota la memoria</a></small></span></label></div>
     <div class="field"><label for="glossary">Glossario (JSON, facoltativo)</label><textarea id="glossary" placeholder='{"Dragonborn": "Sangue di Drago"}' spellcheck="false"></textarea></div>
   </details>
+  <div class="field" style="margin-top:14px"><label for="out_where">Dove salvare il risultato</label>
+    <select id="out_where"><option value="download">Scarica dal browser</option><option value="folder">Salva in una cartella del PC</option></select></div>
+  <div id="outBox" class="hide">
+    <div class="row">
+      <div class="field"><label for="out_dir">Cartella</label>
+        <div style="display:flex;gap:8px"><input type="text" id="out_dir" autocomplete="off" placeholder="es. C:\Mods\Traduzioni"><button class="sec" id="browseBtn" type="button">Sfoglia...</button></div></div>
+      <div class="field"><label for="out_mode">Formato</label>
+        <select id="out_mode"><option value="folder">Cartella pronta (da copiare nel gioco o nel mod manager)</option><option value="zip">File ZIP</option></select></div>
+    </div>
+    <p class="note" style="margin:-4px 0 10px">Non sovrascrive mai nulla: se il nome esiste gi&agrave; aggiunge (2), (3)...</p>
+  </div>
   <div class="field" style="margin-top:14px"><label class="check"><input type="checkbox" id="dry"><span>Solo analisi<small>Non chiama nessuna AI: mostra quante stringhe verrebbero tradotte.</small></span></label></div>
   <div class="actions"><button id="go" disabled>Traduci</button><button id="stop" class="sec hide">Annulla</button><span id="msg" class="err"></span></div>
 </section>
@@ -115,6 +129,15 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
   <p class="note" id="resNote"></p>
 </section>
 </main>
+<div id="modal" class="hide" style="position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10">
+  <div class="card" style="width:100%;max-width:560px;margin:0;max-height:85vh;display:flex;flex-direction:column">
+    <h2>Scegli la cartella</h2>
+    <div style="display:flex;gap:8px;margin-bottom:8px"><button class="sec" id="bUp" type="button">&uarr; Su</button><input type="text" id="bPath" readonly style="flex:1"></div>
+    <div id="bQuick" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
+    <ul id="bList" style="list-style:none;margin:0 0 10px;padding:0;overflow:auto;flex:1;border:1px solid var(--line);border-radius:8px;min-height:160px"></ul>
+    <div style="display:flex;gap:8px;align-items:center"><button class="sec" id="bNew" type="button">Nuova cartella</button><span id="bErr" class="err" style="flex:1;font-size:13px"></span><button class="sec" id="bCancel" type="button">Annulla</button><button id="bOk" type="button">Usa questa cartella</button></div>
+  </div>
+</div>
 <script>
 const T="__TOKEN__", D=__DEFAULTS__;
 const $=s=>document.querySelector(s);
@@ -192,13 +215,45 @@ async function loadContext(withNexus){
 }
 $("#ctxBtn").onclick=()=>{ if(!$("#nexus_ref").value.trim()){$("#ctxErr").textContent="Inserisci il link o l'ID della mod su Nexus";return} loadContext(true) };
 
+/* ---- dove salvare ---- */
+$("#out_where").value=D.saved.out_where||"download"; $("#out_dir").value=D.saved.out_dir||""; $("#out_mode").value=D.saved.out_mode||"folder";
+function syncOut(){ $("#outBox").classList.toggle("hide",$("#out_where").value!=="folder") }
+$("#out_where").onchange=syncOut; syncOut();
+let bCur="";
+async function loadDir(path){
+  $("#bErr").textContent="";
+  try{
+    const j=await api("/api/browse?path="+encodeURIComponent(path||""));
+    bCur=j.path; $("#bPath").value=j.path; $("#bUp").disabled=!j.parent&&!j.drives.length; $("#bUp").dataset.parent=j.parent||"";
+    const q=$("#bQuick"); q.innerHTML="";
+    for(const p of [...j.quick,...(j.drives||[])]){const b=document.createElement("button");b.type="button";b.className="sec";b.style.padding="4px 10px";b.textContent=p.split(/[\\/]/).filter(Boolean).pop()||p;b.title=p;b.onclick=()=>loadDir(p);q.appendChild(b)}
+    const l=$("#bList"); l.innerHTML="";
+    if(!j.dirs.length){const e=document.createElement("li");e.style.cssText="padding:10px;color:var(--mute)";e.textContent="(nessuna sottocartella)";l.appendChild(e)}
+    for(const d of j.dirs){const e=document.createElement("li");e.style.cssText="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--line)";e.textContent="\uD83D\uDCC1 "+d;e.onclick=()=>loadDir(j.path.replace(/[\\/]+$/,"")+j.sep+d);l.appendChild(e)}
+  }catch(e){ $("#bErr").textContent=e.message }
+}
+$("#browseBtn").onclick=()=>{ $("#modal").classList.remove("hide"); loadDir($("#out_dir").value.trim()) };
+$("#bUp").onclick=()=>loadDir($("#bUp").dataset.parent||"");
+$("#bCancel").onclick=()=>$("#modal").classList.add("hide");
+$("#bOk").onclick=()=>{ $("#out_dir").value=bCur; $("#modal").classList.add("hide") };
+$("#bNew").onclick=async()=>{
+  const n=prompt("Nome della nuova cartella:"); if(!n)return;
+  try{ const j=await api("/api/mkdir",{method:"POST",body:JSON.stringify({path:bCur,name:n})}); loadDir(j.path) }catch(e){ $("#bErr").textContent=e.message }
+};
+
+/* ---- memoria ---- */
+$("#use_memory").checked=D.saved.use_memory!==false; $("#shorten").checked=D.saved.shorten!==false; $("#review").checked=!!D.saved.review;
+async function memRefresh(){ try{ const m=await api("/api/memory"); $("#memInfo").textContent=m.entries?("Salvate "+m.entries+" traduzioni ("+(m.bytes/1048576).toFixed(1)+" MB)."):"Ancora vuota." }catch(e){} }
+memRefresh();
+$("#memClear").onclick=async e=>{ e.preventDefault(); if(!confirm("Cancellare tutte le traduzioni salvate? Dovranno essere rifatte (e ripagate) la prossima volta."))return; await api("/api/memory/clear",{method:"POST",body:"{}"}); memRefresh() };
+
 function setRunning(r){ $("#go").disabled=r||!uploadId; $("#stop").classList.toggle("hide",!r); }
 $("#go").onclick=async()=>{
   $("#msg").textContent=""; $("#result").classList.add("hide");
   const p=PRESETS[$("#preset").value];
   const s={upload_id:uploadId,lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
     model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim(),
-    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,glossary:$("#glossary").value.trim(),dry_run:$("#dry").checked};
+    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,shorten:$("#shorten").checked,review:$("#review").checked,glossary:$("#glossary").value.trim(),dry_run:$("#dry").checked};
   try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify(s)}); jobId=j.job_id; }
   catch(e){ $("#msg").textContent=e.message; return }
   setRunning(true); $("#progress").classList.remove("hide"); $("#log").textContent="";
@@ -218,18 +273,27 @@ function finish(j){
   const R=$("#result"); R.classList.remove("hide");
   $("#stats").innerHTML=""; $("#resAction").innerHTML=""; $("#warnBox").classList.add("hide"); $("#failBox").classList.add("hide"); $("#resNote").textContent="";
   if(j.state==="cancelled"){ $("#resTitle").textContent="Annullato"; $("#resNote").textContent="Nessun file prodotto."; return }
-  if(j.state==="error"){ $("#resTitle").textContent="Errore"; const p=document.createElement("p"); p.className="err"; p.textContent=j.error; $("#resAction").appendChild(p); return }
+  if(j.state==="error"){ $("#resTitle").textContent="Errore"; const p=document.createElement("p"); p.className="err"; p.textContent=j.error; $("#resAction").appendChild(p);
+    if(j.phase==="Interrotto"){ const b=document.createElement("button"); b.className="sec"; b.textContent="Riprendi"; b.onclick=()=>{ R.classList.add("hide"); $("#go").click() }; $("#resAction").appendChild(b) }
+    memRefresh(); return }
   const r=j.report;
   $("#resTitle").textContent=j.dry?"Analisi completata":"Traduzione completata";
   const stat=(n,l)=>{const d=document.createElement("div");const b=document.createElement("b");b.textContent=n;d.appendChild(b);d.appendChild(document.createTextNode(l));$("#stats").appendChild(d)};
   stat(r.translated,j.dry?"stringhe traducibili":"stringhe tradotte");
-  if(!j.dry){ stat(r.kept_original,"lasciate originali"); stat(r.files.length,"file modificati o creati"); }
-  if(!j.dry){
+  if(!j.dry){ stat(r.kept_original,"lasciate originali"); stat(r.files.length,"file modificati o creati"); if(r.from_memory)stat(r.from_memory,"dalla memoria (gratis)"); if(r.shortened)stat(r.shortened,"accorciate"); if(r.qa_checked)stat(r.qa_checked+" / "+r.qa_fixed,"riviste / corrette"); }
+  if(!j.dry && j.saved_to){
+    const p=document.createElement("p"); p.style.margin="0 0 10px"; p.textContent="Salvato in: "+j.saved_to; $("#resAction").appendChild(p);
+    const b=document.createElement("button"); b.textContent="Apri la cartella"; b.onclick=()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#resNote").textContent=e.message}); $("#resAction").appendChild(b);
+    $("#resNote").textContent="Fai una copia di sicurezza prima di installarla e controlla i termini del gioco: la lista dei campi e la verifica coprono la struttura, non la qualit\u00e0 della traduzione.";
+  } else if(!j.dry){
     const a=document.createElement("a"); a.className="dl"; a.textContent="Scarica la mod tradotta"; a.href="/api/download/"+jobId+"?t="+encodeURIComponent(T); $("#resAction").appendChild(a);
     $("#resNote").textContent="Fai una copia di sicurezza prima di installarla e controlla i termini del gioco: la lista dei campi e la verifica coprono la struttura, non la qualità della traduzione.";
   } else { $("#resNote").textContent="Nessuna chiamata AI e nessun file prodotto."; }
   if(r.warnings.length){ $("#warnBox").classList.remove("hide"); $("#warnSum").textContent="Avvisi ("+r.warnings.length+")"; li($("#warnList"),r.warnings,100) }
-  if(r.failures.length){ $("#failBox").classList.remove("hide"); $("#failSum").textContent="Stringhe non tradotte o rifiutate ("+r.failures.length+")"; li($("#failList"),r.failures,100) }
+  if(r.failures.length){ $("#failBox").classList.remove("hide"); $("#failSum").textContent="Stringhe non tradotte o rifiutate ("+r.failures.length+")"; li($("#failList"),r.failures,100);
+    if(!j.dry){ const b=document.createElement("button"); b.className="sec"; b.style.marginLeft="10px"; b.textContent="Riprova le fallite"; b.onclick=()=>{ R.classList.add("hide"); $("#go").click() }; $("#resAction").appendChild(b);
+      $("#resNote").textContent+=" Le gi\u00e0 tradotte sono in memoria: riprovando si rifanno solo quelle fallite." } }
+  memRefresh();
 }
 </script>
 </body>
