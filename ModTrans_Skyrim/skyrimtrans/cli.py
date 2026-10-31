@@ -11,7 +11,36 @@ from .translator import (DEFAULT_MODEL, AbortRun, AnthropicBackend, OpenAICompat
                          store_for)
 
 
+def glossary_main(argv) -> int:
+    from .glossary import GlossaryError, build_glossary
+    ap = argparse.ArgumentParser(
+        prog="skyrimtrans glossario",
+        description="Costruisce un glossario ufficiale accoppiando i file Strings del gioco in due lingue.")
+    ap.add_argument("data", type=Path, help="cartella Data di Skyrim (o quella del gioco)")
+    ap.add_argument("-l", "--lang", required=True, choices=sorted(LANGS), help="lingua di destinazione (es. italian)")
+    ap.add_argument("-s", "--source", default="english", choices=sorted(LANGS))
+    ap.add_argument("-o", "--output", type=Path, help="file JSON (default: glossario_<lingua>.json nella cartella corrente)")
+    a = ap.parse_args(argv)
+    try:
+        gl, info = build_glossary(a.data, a.source, a.lang, LANGS[a.source][1], LANGS[a.lang][1])
+    except GlossaryError as e:
+        print(f"Errore: {e}", file=sys.stderr)
+        return 2
+    out = a.output or Path(f"glossario_{a.lang}.json")
+    out.write_text(json.dumps(gl, ensure_ascii=False, indent=1), "utf-8")
+    print(f"Glossario: {info['terms']} termini da {len(info['used'])} file ({', '.join(info['used'])}) -> {out}")
+    if info["missing"]:
+        print(f"  Senza l'altra lingua, saltati: {', '.join(info['missing'])}")
+    if info["ambiguous"]:
+        print(f"  Nomi con traduzioni diverse nel gioco, esclusi: {info['ambiguous']}")
+    print("  Usalo con: skyrimtrans MiaMod.zip -l", a.lang, "--game-glossary", out)
+    return 0
+
+
 def main(argv=None, backend=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] in ("glossario", "glossary"):
+        return glossary_main(argv[1:])
     ap = argparse.ArgumentParser(
         prog="skyrimtrans", description="Traduce le mod di Skyrim senza toccare la struttura.")
     ap.add_argument("mod", type=Path, help="cartella, .zip o .esp/.esm/.esl")
@@ -28,7 +57,9 @@ def main(argv=None, backend=None) -> int:
                     help="es. http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio)")
     ap.add_argument("--api-key", default=None, help="altrimenti OPENAI_API_KEY / ANTHROPIC_API_KEY")
     ap.add_argument("--batch-items", type=int, default=40, help="stringhe per richiesta (con modelli piccoli: 5-10)")
-    ap.add_argument("--glossary", type=Path, help="JSON {termine: traduzione}")
+    ap.add_argument("--glossary", type=Path, help="JSON {termine: traduzione}: i tuoi termini, sempre dati al modello e con la precedenza")
+    ap.add_argument("--game-glossary", type=Path, help="glossario ufficiale creato con 'skyrimtrans glossario' (grande: al modello va solo ciò che serve a ogni lotto)")
+    ap.add_argument("--game-data", type=Path, help="cartella Data di Skyrim: costruisce il glossario ufficiale al volo (come 'glossario')")
     ap.add_argument("--fresh", action="store_true", help="ignora la memoria delle traduzioni (ritraduce tutto; i risultati la aggiornano)")
     ap.add_argument("--review", action="store_true", help="dopo la traduzione, un secondo passaggio AI rilegge e corregge errori evidenti (più richieste)")
     ap.add_argument("--no-shorten", action="store_true", help="non accorciare i testi d'interfaccia molto più lunghi dell'originale")
@@ -64,9 +95,20 @@ def main(argv=None, backend=None) -> int:
             except ImportError:
                 ap.error("manca la libreria: pip install anthropic (oppure usa --provider openai)")
     profile = f"{a.provider}-{a.model or (DEFAULT_MODEL if a.provider == 'anthropic' else 'x')}"
-    store = None if a.no_memory else store_for(a.lang, profile, glossary)
+    game_gl = None
+    try:
+        if a.game_glossary:
+            game_gl = json.loads(a.game_glossary.read_text("utf-8"))
+        elif a.game_data:
+            from .glossary import build_glossary
+            game_gl, ginfo = build_glossary(a.game_data, a.source, a.lang, LANGS[a.source][1], LANGS[a.lang][1])
+            print(f"Glossario ufficiale: {ginfo['terms']} termini da {len(ginfo['used'])} file")
+    except (ValueError, OSError) as e:
+        print(f"Errore nel glossario ufficiale: {e}", file=sys.stderr)
+        return 2
+    store = None if a.no_memory else store_for(a.lang, profile, {**(game_gl or {}), **(glossary or {})} or None)
     tr = Translator(backend, a.lang.capitalize(), glossary, batch_items=a.batch_items, store=store,
-                    reuse_memory=not a.fresh, shorten=not a.no_shorten, review=a.review)
+                    reuse_memory=not a.fresh, shorten=not a.no_shorten, review=a.review, game_glossary=game_gl)
 
     def prog(d, t):
         print(f"\r  tradotte {d}/{t}", end="", file=sys.stderr, flush=True)
