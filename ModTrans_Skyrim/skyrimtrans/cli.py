@@ -31,6 +31,8 @@ def glossary_main(argv) -> int:
     print(f"Glossario: {info['terms']} termini da {len(info['used'])} file ({', '.join(info['used'])}) -> {out}")
     if info["missing"]:
         print(f"  Senza l'altra lingua, saltati: {', '.join(info['missing'])}")
+    if info["common"] or info["literal"]:
+        print(f"  Tolte le traduzioni ovvie: {info['common']} parole comuni e {info['literal']} nomi composti letteralmente")
     if info["ambiguous"]:
         print(f"  Nomi con traduzioni diverse nel gioco, esclusi: {info['ambiguous']}")
     print("  Usalo con: skyrimtrans MiaMod.zip -l", a.lang, "--game-glossary", out)

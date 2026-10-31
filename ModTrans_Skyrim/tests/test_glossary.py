@@ -16,11 +16,12 @@ from skyrimtrans.cli import main  # noqa: E402
 from skyrimtrans.translator import Translator  # noqa: E402
 
 
-def build_strings(d: dict[int, str], enc="cp1252") -> bytes:
+def build_strings(d: dict[int, str], enc="cp1252", prefixed=False) -> bytes:
     data, entries = b"", []
     for sid, text in d.items():
         entries.append((sid, len(data)))
-        data += text.encode(enc) + b"\0"
+        z = text.encode(enc) + b"\0"
+        data += (struct.pack("<I", len(z)) + z) if prefixed else z
     return struct.pack("<II", len(entries), len(data)) + b"".join(struct.pack("<II", a, b) for a, b in entries) + data
 
 
@@ -182,3 +183,31 @@ def test_lowercase_and_sentence_like_entries_are_excluded(tmp_path):
                      {1: "freccia", 2: "Spada di Ferro", 3: "Benvenuto a Whiterun!", 4: "Un nome molto lungo con troppe parole"})
     gl, _ = G.build_glossary(data, "english", "italian")
     assert gl == {"Iron Sword": "Spada di Ferro"}
+
+
+def test_obvious_translations_are_left_out_but_special_ones_stay(tmp_path):
+    en = {1: "Gold", 2: "Iron", 3: "Sword", 4: "Ingot", 5: "Iron Sword", 6: "Gold Ingot", 7: "Dragonborn",
+          8: "Nirnroot", 9: "Iron Ingot", 10: "Hall of the Dead"}
+    it = {1: "Oro", 2: "Ferro", 3: "Spada", 4: "Lingotto", 5: "Spada di Ferro", 6: "Lingotto d'Oro", 7: "Sangue di Drago",
+          8: "Radicenirn", 9: "Lingotto di Ferro", 10: "Sala dei Morti"}
+    data = make_data(tmp_path, en, it)
+    # nei testi del gioco "gold" compare spesso in minuscolo: è una parola comune
+    talk = {n: "I have some gold for you" for n in range(100, 112)}
+    (data / "Strings" / "Skyrim_english.ILSTRINGS").write_bytes(build_strings(talk, prefixed=True))
+    gl, info = G.build_glossary(data, "english", "italian")
+    assert "Gold" not in gl                                           # parola comune, una parola per lato: ovvia
+    assert gl["Iron"] == "Ferro"                                      # rara nei testi di questo mini-gioco: resta (soglia sul conteggio)
+    assert gl["Dragonborn"] == "Sangue di Drago"                      # non letterale: resta
+    assert gl["Nirnroot"] == "Radicenirn"                             # parola rara, una sola parola: resta
+    assert "Iron Sword" not in gl and "Gold Ingot" not in gl and "Iron Ingot" not in gl    # somma delle parti: il modello lo sa
+    assert gl["Hall of the Dead"] == "Sala dei Morti"                 # "Dead" non è nel lessico: nel dubbio resta
+    assert info["common"] == 1 and info["literal"] == 3
+
+
+def test_literal_check_unit():
+    lex = {"iron": "ferro", "sword": "spada", "black": "nero", "horse": "cavallo"}
+    assert G.is_literal("Iron Sword", "Spada di Ferro", lex)
+    assert G.is_literal("Black Horse", "Cavallo Nera", lex)            # genere/plurale tollerati
+    assert not G.is_literal("Iron Sword", "Lama d'Acciaio", lex)       # traduzione libera: resta
+    assert not G.is_literal("Iron Dragon", "Drago di Ferro", lex)      # "Dragon" sconosciuta: nel dubbio resta
+    assert not G.is_literal("Dragonborn", "Sangue di Drago", lex)      # una sola parola: mai letterale
