@@ -110,6 +110,7 @@ class OpenAICompatBackend:
         self.api_key = api_key
 
     def __call__(self, system: str, user: str) -> str:
+        import http.client
         import urllib.error
         import urllib.request
 
@@ -126,10 +127,18 @@ class OpenAICompatBackend:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 data = json.load(r)
         except urllib.error.HTTPError as e:
-            raise BackendError(f"HTTP {e.code}: {e.read()[:300]!r}", e.code, _retry_after(e.headers)) from None
-        except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as e:
+            try:
+                detail = e.read()[:300]
+            except (OSError, http.client.HTTPException):
+                detail = b""
+            raise BackendError(f"HTTP {e.code}: {detail!r}", e.code, _retry_after(e.headers)) from None
+        except (OSError, http.client.HTTPException, json.JSONDecodeError, UnicodeDecodeError) as e:
+            # rete caduta, DNS, timeout, risposta interrotta a metà (IncompleteRead), JSON troncato: errori temporanei
             raise BackendError(f"connessione o risposta non valida: {e}") from None
-        text = data["choices"][0]["message"]["content"] or ""
+        try:
+            text = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            raise BackendError("risposta del servizio in un formato inatteso") from None
         # alcuni modelli locali (reasoning) mettono il ragionamento in <think>...</think>
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
 
@@ -372,18 +381,32 @@ class Translator:
         s = template.format(lang=self.language, glossary=self._gl)
         return s + (BRIEF_HEADER + self.brief + "\n</mod_context>" if self.brief else "")
 
-    def _aux_call(self, system: str, items: list[dict]) -> list[dict] | None:
-        self.heartbeat()
-        try:
-            reply = self.backend(system, json.dumps(items, ensure_ascii=False))
-            self.stats["requests"] += 1
-            return _parse_list(reply)
-        except BackendError as e:
-            if e.fatal:
-                raise AbortRun(f"Il servizio AI ha rifiutato la richiesta: {e}") from None
-            self.warnings.append(f"passaggio di rifinitura saltato: {e}")
-        except Exception as e:  # noqa: BLE001 - JSON rovinato: la rifinitura è facoltativa
-            self.warnings.append(f"passaggio di rifinitura saltato: risposta non valida ({e})")
+    def _aux_call(self, system: str, items: list[dict], what: str = "rifinitura") -> list[dict] | None:
+        """Una richiesta dei passaggi facoltativi. Gli errori di rete si riprovano con attesa, come nella traduzione;
+        se non va, il passaggio viene saltato per questo gruppo e la traduzione già accettata resta com'è."""
+        payload = json.dumps(items, ensure_ascii=False)
+        net_fail = 0
+        while True:
+            self.heartbeat()
+            try:
+                reply = self.backend(system, payload)
+                self.stats["requests"] += 1
+                return _parse_list(reply)
+            except BackendError as e:
+                if e.fatal:
+                    raise AbortRun(f"Il servizio AI ha rifiutato la richiesta: {e}") from None
+                net_fail += 1
+                self.stats["retries"] += 1
+                if net_fail > self.net_retries:
+                    why = f"errore del servizio AI: {e}"
+                    break
+                self._wait(e.retry_after if e.retry_after is not None else min(2.0 * 2 ** (net_fail - 1), 60.0),
+                           f"errore del servizio AI: {e}")
+            except Exception as e:  # noqa: BLE001 - JSON rovinato: la rifinitura è facoltativa
+                self.stats["requests"] += 1
+                why = f"risposta non valida ({e})"
+                break
+        self.warnings.append(f"{what} saltata per {len(items)} stringhe (restano com'erano): {why}")
         return None
 
     def _apply_fix(self, k, todo, new, fit) -> str | None:
@@ -408,7 +431,7 @@ class Translator:
         long = [k for k, m in self._fresh.items() if checks.too_long(_base(k[0]), todo[k].masked, m)]
         for i in range(0, len(long), 30):
             chunk = long[i:i + 30]
-            got = self._aux_call(self._aux_system(SHORTEN_SYSTEM), [
+            got = self._aux_call(self._aux_system(SHORTEN_SYSTEM), what="accorciatura", items=[
                 {"id": n, "original": todo[k].masked, "current": self._fresh[k], "max_chars": checks.max_chars(todo[k].masked)}
                 for n, k in enumerate(chunk)])
             answers = {}
@@ -430,7 +453,7 @@ class Translator:
         keys = list(self._fresh)
         for i in range(0, len(keys), 30):
             chunk = keys[i:i + 30]
-            got = self._aux_call(self._aux_system(REVIEW_SYSTEM), [
+            got = self._aux_call(self._aux_system(REVIEW_SYSTEM), what="revisione", items=[
                 {"id": n, "kind": _hint(k[0]), "original": todo[k].masked, "translation": self._fresh[k]}
                 for n, k in enumerate(chunk)])
             if got is None:
