@@ -30,6 +30,10 @@ SETTINGS_FILE = Path.home() / ".skyrimtrans.json"
 SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items", "nexus_game",
              "out_where", "out_dir", "out_mode", "use_memory", "shorten", "review", "game_data")  # mai la chiave API
 ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
+OWN_KEYS = ("upload_id", "brief", "dry_run")      # impostazioni della singola mod; tutto il resto è della coda
+MAX_LANES = 6
+PRESET_LABELS = {"claude": "Claude", "openai": "OpenAI", "ollama": "Ollama", "lmstudio": "LM Studio",
+                 "custom": "API personalizzata"}
 LANG_LABELS = {"english": "Inglese", "french": "Francese", "german": "Tedesco", "italian": "Italiano",
                "spanish": "Spagnolo", "russian": "Russo", "polish": "Polacco", "czech": "Ceco"}
 
@@ -42,14 +46,35 @@ class Job:
     def __init__(self, dry: bool, name: str, lang: str, s: dict | None = None):
         self.id = uuid.uuid4().hex
         self.state, self.phase, self.dry = "queued", "In coda", dry
-        self.s = s or {}                  # impostazioni di questa mod (la chiave API resta solo in memoria)
+        self.own = s or {}                # impostazioni della mod (con una coda: file, contesto, solo analisi)
+        self.s = dict(self.own)           # impostazioni effettive quando parte (coda + mod); la chiave API resta in memoria
+        self.lane_id = ""
         self.service_down = False         # il servizio AI non risponde: la coda si mette in pausa
-        self.upload_id = self.s.get("upload_id")
+        self.upload_id = self.own.get("upload_id")
         self.done = self.total = 0
         self.log: list[str] = []
         self.report = self.error = self.out = self.saved_to = None
         self.name, self.lang = name, lang
         self.cancel = threading.Event()
+
+
+class Lane:
+    """Una coda: ha le sue impostazioni (servizio AI, modello, lingua...) e una mod alla volta; le code girano in parallelo."""
+
+    def __init__(self, lane_id: str, name: str, s: dict):
+        self.id, self.name, self.s = lane_id, name, s
+        self.pending: collections.deque[Job] = collections.deque()
+        self.running: Job | None = None
+        self.paused, self.pause_msg = False, ""
+        self.worker: threading.Thread | None = None
+
+    def summary(self) -> str:
+        s = self.s
+        if not s.get("lang"):
+            return ""
+        who = PRESET_LABELS.get(s.get("preset") or "", "") or ("Claude" if s.get("provider") == "anthropic" else "API")
+        model = s.get("model") or (DEFAULT_MODEL if s.get("provider") == "anthropic" else "")
+        return f"{who}{' · ' + model if model else ''} \u2192 {LANG_LABELS.get(s['lang'], s['lang'])}"
 
 
 class App:
@@ -64,52 +89,87 @@ class App:
             if e.get("saved_to"):
                 self.outputs.add(str(Path(e["saved_to"]).resolve()))
         self.order: list[str] = []       # ordine di arrivo delle mod
-        self.pending: collections.deque[Job] = collections.deque()
+        self.lanes: dict[str, Lane] = {}
+        self.lane_seq = 0
+        self.default_lane_id = ""
         self.cv = threading.Condition()
-        self.paused, self.pause_msg, self.stopping = False, "", False
-        self.worker: threading.Thread | None = None
+        self.stopping = False
 
-    # -- coda: una mod alla volta, la successiva parte da sola
-    def enqueue(self, job: Job) -> int:
+    # -- code: ognuna ha un lavoratore proprio (in parallelo alle altre); dentro una coda, una mod alla volta
+    def new_lane(self, s: dict) -> Lane:
         with self.cv:
+            if len(self.lanes) >= MAX_LANES:
+                raise ValueError(f"Al massimo {MAX_LANES} code insieme: chiudine una che non ti serve")
+            self.lane_seq += 1
+            lane = Lane(uuid.uuid4().hex, f"Coda {self.lane_seq}", dict(s))
+            self.lanes[lane.id] = lane
+            return lane
+
+    def default_lane(self) -> Lane:
+        with self.cv:
+            lane = self.lanes.get(self.default_lane_id)
+        if lane is None:
+            lane = self.new_lane({})
+            self.default_lane_id = lane.id
+        return lane
+
+    def enqueue(self, job: Job, lane: Lane) -> int:
+        with self.cv:
+            job.lane_id = lane.id
             self.jobs[job.id] = job
             self.order.append(job.id)
-            self.pending.append(job)
-            if self.worker is None:
-                self.worker = threading.Thread(target=self._work, daemon=True)
-                self.worker.start()
+            lane.pending.append(job)
+            if lane.worker is None:
+                lane.worker = threading.Thread(target=self._work, args=(lane,), daemon=True)
+                lane.worker.start()
             self.cv.notify_all()
-            return len(self.pending)
+            return len(lane.pending)
 
     def cancel(self, job: Job) -> None:
         with self.cv:
             job.cancel.set()
-            if job in self.pending:                      # non è ancora partita: si toglie subito dalla coda
-                self.pending.remove(job)
+            lane = self.lanes.get(job.lane_id)
+            if lane and job in lane.pending:             # non è ancora partita: si toglie subito dalla coda
+                lane.pending.remove(job)
                 job.state, job.phase = "cancelled", "Annullato"
                 self.cv.notify_all()
 
-    def set_paused(self, paused: bool, msg: str = "") -> None:
+    def set_paused(self, lane: Lane, paused: bool, msg: str = "") -> None:
         with self.cv:
-            self.paused, self.pause_msg = paused, msg if paused else ""
+            lane.paused, lane.pause_msg = paused, msg if paused else ""
             self.cv.notify_all()
 
-    def _work(self) -> None:
+    def close_lane(self, lane: Lane) -> bool:
+        with self.cv:
+            if lane.pending or lane.running:
+                return False
+            self.lanes.pop(lane.id, None)
+            self.cv.notify_all()
+            return True
+
+    def _work(self, lane: Lane) -> None:
         while True:
             with self.cv:
-                while not self.stopping and (self.paused or not self.pending):
+                while not self.stopping and lane.id in self.lanes and (lane.paused or not lane.pending):
                     self.cv.wait(timeout=1)
-                if self.stopping:
+                if self.stopping or lane.id not in self.lanes:
                     return
-                job = self.pending.popleft()
+                job = lane.pending.popleft()
                 job.state, job.phase = "running", "Avvio"
-            run_job(self, job, job.s)
+                job.s = {**lane.s, **job.own}            # le impostazioni della coda valgono al momento della partenza
+                job.lang = job.s.get("lang", job.lang)
+                lane.running = job
+            try:
+                run_job(self, job, job.s)
+            finally:
+                lane.running = None
             if job.state == "done" and not job.dry:
                 self._record(job)
                 if not (job.report or {}).get("failures"):
-                    job.s.pop("api_key", None)           # finito bene: la chiave non serve più nemmeno in memoria
+                    job.s.pop("api_key", None)           # finito bene: la chiave della mod non serve più in memoria
+                    job.own.pop("api_key", None)
             if job.service_down:
-                self.set_paused(True, job.error or "Il servizio AI non risponde")
+                self.set_paused(lane, True, job.error or "Il servizio AI non risponde")
 
     def _record(self, job: Job) -> None:
         r = job.report or {}
@@ -308,15 +368,46 @@ def run_job(app: App, job: Job, s: dict) -> None:
 ID_OK = re.compile(r"[0-9a-f]{32}")
 
 
+def check_settings(app: App, s: dict, need_upload: bool = True) -> str | None:
+    """Controlla lingue e cartella di output. Ritorna il messaggio d'errore o None. (La cartella non scrivibile solleva OutputError.)"""
+    if need_upload and s.get("upload_id") not in app.uploads:
+        return "Carica prima un file"
+    if s.get("lang") not in LANGS or s.get("source") not in LANGS:
+        return "Lingua non valida"
+    if s["lang"] == s["source"]:
+        return "La lingua di destinazione coincide con quella originale"
+    if s.get("out_where") == "folder" and not s.get("dry_run"):
+        if not (s.get("out_dir") or "").strip():
+            return "Scegli la cartella dove salvare"
+        check_writable_dir(Path(s["out_dir"].strip()))           # ValueError con messaggio chiaro
+    return None
+
+
+def lanes_of(app: App, body: dict) -> list[Lane]:
+    """La coda indicata da `lane_id`, oppure tutte."""
+    with app.cv:
+        if body.get("lane_id"):
+            lane = app.lanes.get(body["lane_id"])
+            return [lane] if lane else []
+        return list(app.lanes.values())
+
+
 def queue_view(app: App) -> dict:
-    """Stato di tutte le mod della sessione, nell'ordine in cui sono state aggiunte."""
+    """Stato di tutte le code e delle loro mod, nell'ordine in cui le mod sono state aggiunte."""
+    with app.cv:
+        lanes = list(app.lanes.values())
     jobs = []
-    for jid in app.order:
+    for jid in list(app.order):
         j = app.jobs[jid]
+        if j.lane_id not in app.lanes:                  # coda chiusa: la mod resta scaricabile dalla cronologia
+            continue
         jobs.append({"id": j.id, "name": j.name, "lang": j.lang, "state": j.state, "phase": j.phase, "done": j.done,
-                     "total": j.total, "dry": j.dry, "saved_to": j.saved_to, "error": j.error,
+                     "total": j.total, "dry": j.dry, "saved_to": j.saved_to, "error": j.error, "lane": j.lane_id,
                      "upload_id": j.upload_id, "downloadable": bool(j.out and j.out.exists())})
-    return {"jobs": jobs, "paused": app.paused, "pause_msg": app.pause_msg}
+    paused = [l for l in lanes if l.paused]
+    return {"lanes": [{"id": l.id, "name": l.name, "summary": l.summary(), "paused": l.paused, "pause_msg": l.pause_msg,
+                       "busy": bool(l.pending or l.running)} for l in lanes],
+            "jobs": jobs, "paused": bool(paused), "pause_msg": paused[0].pause_msg if paused else ""}
 
 
 def make_handler(app: App, port_holder: list):
@@ -440,26 +531,61 @@ def make_handler(app: App, port_holder: list):
                     return self._json(build_context(app, self._body_json()))
                 if u.path == "/api/start":
                     s = self._body_json()
+                    lane_id = s.pop("lane_id", None)
                     if s.get("upload_id") not in app.uploads:
                         return self._json({"error": "Carica prima un file"}, 400)
-                    if s.get("lang") not in LANGS or s.get("source") not in LANGS:
-                        return self._json({"error": "Lingua non valida"}, 400)
-                    if s["lang"] == s["source"]:
-                        return self._json({"error": "La lingua di destinazione coincide con quella originale"}, 400)
-                    if s.get("out_where") == "folder" and not s.get("dry_run"):
-                        if not (s.get("out_dir") or "").strip():
-                            return self._json({"error": "Scegli la cartella dove salvare"}, 400)
-                        check_writable_dir(Path(s["out_dir"].strip()))   # ValueError con messaggio chiaro
-                    job = Job(bool(s.get("dry_run")), app.uploads[s["upload_id"]][1], s["lang"], s)
-                    save_settings(s)
-                    position = app.enqueue(job)
-                    return self._json({"job_id": job.id, "position": position})
-                if u.path == "/api/queue/resume":
-                    app.set_paused(False)
-                    return self._json({"ok": True})
-                if u.path == "/api/queue/clear":                     # toglie tutte le mod ancora in attesa
+                    if lane_id in (None, ""):                    # modo semplice: tutto nella richiesta, coda predefinita
+                        lane, own, settings = app.default_lane(), s, s
+                    elif lane_id == "new":
+                        settings = {k: v for k, v in s.items() if k not in OWN_KEYS}
+                        lane, own = None, {k: s[k] for k in OWN_KEYS if k in s}
+                    else:
+                        lane = app.lanes.get(lane_id)
+                        if lane is None:
+                            return self._json({"error": "Questa coda non esiste più"}, 404)
+                        settings, own = lane.s, {k: s[k] for k in OWN_KEYS if k in s}
+                    err = check_settings(app, {**(lane.s if lane else {}), **settings, **own} if lane_id != "new"
+                                         else {**settings, **own})
+                    if err:
+                        return self._json({"error": err}, 400)
+                    if lane is None:
+                        lane = app.new_lane(settings)
+                        save_settings(settings)
+                    elif lane_id in (None, ""):
+                        save_settings(s)
+                    job = Job(bool(own.get("dry_run")), app.uploads[own["upload_id"]][1],
+                              {**lane.s, **own}.get("lang", ""), own)
+                    position = app.enqueue(job, lane)
+                    return self._json({"job_id": job.id, "lane_id": lane.id, "position": position})
+                if u.path == "/api/lane/update":
+                    b = self._body_json()
+                    lane = app.lanes.get(b.get("lane_id"))
+                    if lane is None:
+                        return self._json({"error": "Questa coda non esiste più"}, 404)
+                    new = {k: v for k, v in (b.get("settings") or {}).items() if k not in OWN_KEYS}
+                    err = check_settings(app, new, need_upload=False)
+                    if err:
+                        return self._json({"error": err}, 400)
                     with app.cv:
-                        waiting = list(app.pending)
+                        lane.s = new                             # vale per le mod in attesa e per quelle che aggiungi dopo
+                    save_settings(new)
+                    return self._json({"ok": True, "summary": lane.summary()})
+                if u.path == "/api/lane/close":
+                    lane = app.lanes.get(self._body_json().get("lane_id"))
+                    if lane is None:
+                        return self._json({"error": "Questa coda non esiste più"}, 404)
+                    if not app.close_lane(lane):
+                        return self._json({"error": "La coda ha ancora mod in attesa o in corso"}, 400)
+                    return self._json({"ok": True})
+                if u.path == "/api/queue/resume":
+                    for lane in lanes_of(app, self._body_json()):
+                        app.set_paused(lane, False)
+                    return self._json({"ok": True})
+                if u.path == "/api/queue/clear":                     # toglie le mod ancora in attesa (di una coda o di tutte)
+                    waiting = []
+                    for lane in lanes_of(app, self._body_json()):
+                        with app.cv:
+                            waiting += list(lane.pending)
                     for j in waiting:
                         app.cancel(j)
                     return self._json({"cancelled": len(waiting)})
@@ -469,8 +595,11 @@ def make_handler(app: App, port_holder: list):
                     redo_failed = old.state == "done" and not old.dry and bool((old.report or {}).get("failures"))
                     if not (old.state in ("error", "cancelled") or redo_failed) or old.upload_id not in app.uploads:
                         return self._json({"error": "Questa mod non si può rimettere in coda"}, 400)
-                    job = Job(old.dry, old.name, old.lang, dict(old.s))
-                    app.enqueue(job)
+                    lane = app.lanes.get(old.lane_id)
+                    if lane is None:
+                        return self._json({"error": "La coda di questa mod è stata chiusa"}, 400)
+                    job = Job(old.dry, old.name, old.lang, dict(old.own))
+                    app.enqueue(job, lane)
                     return self._json({"job_id": job.id})
                 if u.path == "/api/history/delete":
                     b = self._body_json()
