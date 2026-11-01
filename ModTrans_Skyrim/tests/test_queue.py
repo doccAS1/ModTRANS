@@ -158,7 +158,8 @@ def test_history_download_while_another_mod_is_running(monkeypatch, tmp_path):
     done = json.loads(c.call("/api/start", settings(upload(c, "First.esp"), ai))[1])["job_id"]
     assert wait(c, done)["state"] == "done"
     ai.gate.clear()                                                    # la seconda resta in corso
-    json.loads(c.call("/api/start", settings(upload(c, "Second.esp"), ai))[1])
+    # senza memoria: altrimenti riuserebbe le traduzioni della prima, finirebbe subito e non resterebbe "in corso"
+    json.loads(c.call("/api/start", settings(upload(c, "Second.esp"), ai, use_memory=False))[1])
     until(lambda: queue(c)["jobs"][1]["state"] == "running", "seconda in corso")
     hist = json.loads(c.call("/api/history")[1])
     assert [e["name"] for e in hist["entries"]] == ["First.esp"] and hist["entries"][0]["available"]
