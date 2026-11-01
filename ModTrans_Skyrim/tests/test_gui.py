@@ -42,7 +42,7 @@ def start_server(monkeypatch, tmp_path):
 def wait(c, job):
     for _ in range(100):
         st = json.loads(c.call(f"/api/status/{job}")[1])
-        if st["state"] != "running":
+        if st["state"] not in ("queued", "running"):
             return st
         time.sleep(0.1)
     raise AssertionError("timeout")
@@ -81,6 +81,9 @@ def test_dry_run_and_errors(monkeypatch, tmp_path):
     # richieste non valide
     assert c.call("/api/start", dict(base, lang="english"))[0] == 400
     assert c.call("/api/start", dict(base, upload_id="nope"))[0] == 400
+    # il servizio non risponde: la coda si ferma da sola, la mod successiva aspetta finché non si riprende
+    assert json.loads(c.call("/api/queue")[1])["paused"] is True
+    c.call("/api/queue/resume", {})
     # glossario rotto
     job = json.loads(c.call("/api/start", dict(base, glossary="{rotto", dry_run=True))[1])["job_id"]
     assert "glossario" in wait(c, job)["error"].lower()

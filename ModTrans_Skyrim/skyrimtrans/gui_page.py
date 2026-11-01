@@ -44,6 +44,18 @@ details summary{cursor:pointer;color:var(--mute)}
 details ul{margin:8px 0 0;padding-left:18px;max-height:200px;overflow:auto}
 a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);padding:10px 18px;border-radius:8px;font-weight:600}
 .note{font-size:13px;color:var(--mute);margin-top:10px}
+.q{list-style:none;margin:0;padding:0}
+.q li{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;cursor:pointer}
+.q li.sel{border-color:var(--accent);background:var(--ok-bg)}
+.q .nm{flex:1;min-width:0}.q .nm b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.q .bd{font-size:12px;color:var(--mute);white-space:nowrap}.q .bd.ok{color:var(--accent)}.q .bd.bad{color:var(--bad)}
+.q .bar{height:4px;margin:4px 0 0}
+.q .acts{display:flex;gap:6px;align-items:center}
+button.sm,a.sm{padding:4px 10px;font-size:13px;border-radius:6px}
+a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);font-weight:600}
+.banner{background:var(--ok-bg);border:1px solid var(--warn);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:14px}
+.hist .meta{font-size:12px;color:var(--mute)}
+.hist details{margin:4px 0 0}
 </style>
 </head>
 <body>
@@ -51,13 +63,20 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
 <header><h1>skyrimtrans</h1><p>Traduce le mod di Skyrim senza toccare la struttura: cambia solo il testo.</p></header>
 
 <section class="card" id="drop" tabindex="0">
-  <b id="dropTitle">Trascina qui la mod</b>
-  <span id="dropSub">.zip, .7z, .esp, .esm, .esl &middot; oppure clicca per scegliere il file</span>
-  <input type="file" id="file" class="hide" accept=".zip,.7z,.esp,.esm,.esl">
+  <b id="dropTitle">Trascina qui le mod</b>
+  <span id="dropSub">.zip, .7z, .esp, .esm, .esl &middot; anche pi&ugrave; di una: vengono tradotte una dopo l'altra</span>
+  <input type="file" id="file" class="hide" accept=".zip,.7z,.esp,.esm,.esl" multiple>
+</section>
+
+<section class="card hide" id="queueCard">
+  <h2>Coda</h2>
+  <div id="pauseBox" class="banner hide"><b>Coda in pausa.</b> <span id="pauseMsg"></span><br><button class="sm" id="resumeBtn" type="button" style="margin-top:8px">Riprendi la coda</button></div>
+  <ul class="q" id="qList"></ul>
+  <div class="actions"><button class="sec sm" id="qClear" type="button">Annulla le mod in attesa</button><button class="sec sm" id="qHide" type="button">Nascondi le finite</button></div>
 </section>
 
 <section class="card" id="ctxCard">
-  <h2>Contesto della mod</h2>
+  <h2>Contesto della mod<span id="ctxFor"></span></h2>
   <p class="note" style="margin:0 0 10px">Aiuta il modello a capire di che mod si tratta (tono, ambientazione, nomi da non tradurre). Viene letto dal plugin; puoi aggiungere i dati della pagina Nexus Mods e correggere il testo qui sotto.</p>
   <div class="row">
     <div class="field"><label for="nexus_ref">Link o ID Nexus Mods (facoltativo)</label><input type="text" id="nexus_ref" autocomplete="off" placeholder="es. 168874"></div>
@@ -129,6 +148,12 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
   <details id="failBox" class="hide"><summary id="failSum"></summary><ul id="failList"></ul></details>
   <p class="note" id="resNote"></p>
 </section>
+
+<section class="card hide hist" id="histCard">
+  <h2>Cronologia</h2>
+  <ul class="q" id="histList"></ul>
+  <div class="actions"><span class="note" id="histInfo" style="margin:0;flex:1"></span><button class="sec sm" id="histClear" type="button">Svuota la cronologia</button></div>
+</section>
 </main>
 <div id="modal" class="hide" style="position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10">
   <div class="card" style="width:100%;max-width:560px;margin:0;max-height:85vh;display:flex;flex-direction:column">
@@ -142,7 +167,9 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
 <script>
 const T="__TOKEN__", D=__DEFAULTS__;
 const $=s=>document.querySelector(s);
-let uploadId=null, jobId=null, timer=null, briefTouched=false;
+let items=[], sel=-1, viewJob=null, autoFollow=true, uploadId=null, briefTouched=false, lastQ=null, shownKey=null;
+const seenDone=new Set(), hiddenJobs=new Set();
+const STATE_TXT={queued:"In attesa",running:"In corso",done:"Completata",error:"Errore",cancelled:"Annullata"};
 
 const PRESETS={
   claude:{provider:"anthropic",url:"",model:D.default_model,batch:40,key:"(o variabile ANTHROPIC_API_KEY)"},
@@ -172,47 +199,65 @@ async function api(path,opt={}){
 }
 function fmt(n){return n>1048576?(n/1048576).toFixed(1)+" MB":Math.max(1,Math.round(n/1024))+" KB"}
 
-function upload(file){
+function upload(file,it){
   return new Promise((res,rej)=>{
     const x=new XMLHttpRequest();
     x.open("POST","/api/upload?name="+encodeURIComponent(file.name));
     x.setRequestHeader("X-Token",T);
-    x.upload.onprogress=e=>{if(e.lengthComputable)$("#dropSub").textContent="Caricamento "+Math.round(100*e.loaded/e.total)+"%"};
+    x.upload.onprogress=e=>{if(e.lengthComputable){it.pct=Math.round(100*e.loaded/e.total);renderQueue()}};
     x.onload=()=>{let j={};try{j=JSON.parse(x.responseText)}catch(e){} x.status===200?res(j):rej(new Error(j.error||"Caricamento fallito"))};
     x.onerror=()=>rej(new Error("Caricamento fallito"));
     x.send(file);
   });
 }
-async function pick(file){
-  if(!file)return;
-  $("#msg").textContent=""; $("#go").disabled=true; uploadId=null;
-  $("#dropTitle").textContent=file.name; $("#dropSub").textContent="Caricamento...";
-  try{ const j=await upload(file); uploadId=j.upload_id; $("#dropSub").textContent=fmt(file.size)+" · clicca o trascina un altro file per cambiarlo"; $("#go").disabled=false; $("#ctxBtn").disabled=false;
-       $("#nexus_ref").value=j.nexus_id||""; briefTouched=false; loadContext(false) }
-  catch(e){ $("#dropTitle").textContent="Trascina qui la mod"; $("#dropSub").textContent=""; $("#msg").textContent=e.message }
+function saveFields(){ const it=items[sel]; if(it){ it.brief=$("#brief").value; it.briefTouched=briefTouched; it.nexus_ref=$("#nexus_ref").value } }
+function selectItem(i){
+  saveFields(); sel=i; const it=items[i];
+  $("#brief").value=it?it.brief:""; $("#nexus_ref").value=it?it.nexus_ref:""; briefTouched=it?it.briefTouched:false;
+  uploadId=it&&it.upload_id; $("#ctxBtn").disabled=!uploadId; $("#ctxFor").textContent=it?" — "+it.name:"";
+  $("#ctxMsg").textContent=it&&it.job?"Questa mod è già in coda: cambiare il contesto non ha più effetto su di lei.":""; $("#ctxErr").textContent=""; renderQueue();
+}
+function syncGo(){
+  const n=items.filter(it=>it.status==="ready"&&!it.job).length;
+  $("#go").disabled=!n; $("#go").textContent=n>1?"Traduci "+n+" mod":"Traduci";
+}
+async function addFiles(list){
+  const files=[...list]; if(!files.length)return;
+  $("#msg").textContent="";
+  for(const f of files){
+    const it={name:f.name,size:f.size,upload_id:null,job:null,brief:"",briefTouched:false,nexus_ref:"",status:"upload",err:"",pct:0};
+    items.push(it); if(sel<0||!items[sel]||items[sel].job)selectItem(items.length-1); else renderQueue();
+    try{ const j=await upload(f,it); it.upload_id=j.upload_id; it.nexus_ref=j.nexus_id?String(j.nexus_id):""; it.status="ready";
+         if(items[sel]===it){ $("#nexus_ref").value=it.nexus_ref; uploadId=it.upload_id; $("#ctxBtn").disabled=false }
+         loadContext(false,it) }
+    catch(e){ it.status="fail"; it.err=e.message }
+    renderQueue(); syncGo();
+  }
 }
 const drop=$("#drop");
 drop.onclick=()=>$("#file").click();
 drop.onkeydown=e=>{if(e.key==="Enter"||e.key===" ")$("#file").click()};
-$("#file").onchange=e=>pick(e.target.files[0]);
+$("#file").onchange=e=>{ addFiles(e.target.files); e.target.value="" };
 for(const ev of ["dragenter","dragover"])drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("over")});
 for(const ev of ["dragleave","drop"])drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("over")});
-drop.addEventListener("drop",e=>pick(e.dataTransfer.files[0]));
+drop.addEventListener("drop",e=>addFiles(e.dataTransfer.files));
 addEventListener("dragover",e=>e.preventDefault()); addEventListener("drop",e=>e.preventDefault());
 
 $("#brief").oninput=()=>{briefTouched=true};
 $("#nexus_game").value=D.saved.nexus_game||"skyrimspecialedition";
-async function loadContext(withNexus){
-  if(!uploadId)return;
-  $("#ctxErr").textContent=""; $("#ctxMsg").textContent=withNexus?"Leggo la pagina Nexus e preparo il riassunto...":"Leggo il plugin...";
+async function loadContext(withNexus,it=items[sel]){
+  if(!it||!it.upload_id)return;
+  const here=()=>items[sel]===it;
+  if(here()){ $("#ctxErr").textContent=""; $("#ctxMsg").textContent=withNexus?"Leggo la pagina Nexus e preparo il riassunto...":"Leggo il plugin..." }
   const p=PRESETS[$("#preset").value];
-  const body={upload_id:uploadId,provider:p.provider,model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim()};
+  const body={upload_id:it.upload_id,provider:p.provider,model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim()};
   if(withNexus){body.nexus_ref=$("#nexus_ref").value.trim();body.nexus_key=$("#nexus_key").value.trim();body.nexus_game=$("#nexus_game").value}
   try{
     const j=await api("/api/context",{method:"POST",body:JSON.stringify(body)});
-    if(withNexus||!briefTouched){$("#brief").value=j.brief;briefTouched=false}
-    $("#ctxMsg").textContent="Fonti: "+j.sources.join(", ")+(j.nexus_name?" · Nexus: "+j.nexus_name:"")+(j.warning?" · "+j.warning:"");
-  }catch(e){ $("#ctxMsg").textContent=""; $("#ctxErr").textContent=e.message }
+    if(here()){ if(withNexus||!briefTouched){$("#brief").value=j.brief;briefTouched=false;it.brief=j.brief;it.briefTouched=false} }
+    else if(withNexus||!it.briefTouched){ it.brief=j.brief; it.briefTouched=false }
+    if(here())$("#ctxMsg").textContent="Fonti: "+j.sources.join(", ")+(j.nexus_name?" · Nexus: "+j.nexus_name:"")+(j.warning?" · "+j.warning:"");
+  }catch(e){ if(here()){ $("#ctxMsg").textContent=""; $("#ctxErr").textContent=e.message } }
 }
 $("#ctxBtn").onclick=()=>{ if(!$("#nexus_ref").value.trim()){$("#ctxErr").textContent="Inserisci il link o l'ID della mod su Nexus";return} loadContext(true) };
 
@@ -248,34 +293,124 @@ async function memRefresh(){ try{ const m=await api("/api/memory"); $("#memInfo"
 memRefresh();
 $("#memClear").onclick=async e=>{ e.preventDefault(); if(!confirm("Cancellare tutte le traduzioni salvate? Dovranno essere rifatte (e ripagate) la prossima volta."))return; await api("/api/memory/clear",{method:"POST",body:"{}"}); memRefresh() };
 
-function setRunning(r){ $("#go").disabled=r||!uploadId; $("#stop").classList.toggle("hide",!r); }
 $("#go").onclick=async()=>{
-  $("#msg").textContent=""; $("#result").classList.add("hide");
+  saveFields(); $("#msg").textContent="";
+  const ready=items.filter(it=>it.status==="ready"&&!it.job);
+  if(!ready.length)return;
   const p=PRESETS[$("#preset").value];
-  const s={upload_id:uploadId,lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
+  const base={lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
     model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim(),
-    batch_items:parseInt($("#batch").value)||40,brief:$("#brief").value.trim(),nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,shorten:$("#shorten").checked,review:$("#review").checked,glossary:$("#glossary").value.trim(),game_data:$("#game_data").value.trim(),dry_run:$("#dry").checked};
-  try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify(s)}); jobId=j.job_id; }
-  catch(e){ $("#msg").textContent=e.message; return }
-  setRunning(true); $("#progress").classList.remove("hide"); $("#log").textContent="";
-  clearInterval(timer); timer=setInterval(poll,600); poll();
+    batch_items:parseInt($("#batch").value)||40,nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,shorten:$("#shorten").checked,review:$("#review").checked,glossary:$("#glossary").value.trim(),game_data:$("#game_data").value.trim(),dry_run:$("#dry").checked};
+  let first=null;
+  for(const it of ready){
+    try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify({...base,upload_id:it.upload_id,brief:it.brief.trim()})}); it.job=j.job_id; if(!first)first=j.job_id }
+    catch(e){ $("#msg").textContent=(ready.length>1?it.name+": ":"")+e.message; break }
+  }
+  if(first){ viewJob=first; autoFollow=true; shownKey=null; $("#result").classList.add("hide") }
+  if(items[sel]&&items[sel].job)$("#ctxMsg").textContent="Questa mod è già in coda: cambiare il contesto non ha più effetto su di lei.";
+  syncGo(); pollQueue();
 };
-$("#stop").onclick=()=>api("/api/cancel/"+jobId,{method:"POST",body:"{}"}).catch(()=>{});
+$("#stop").onclick=()=>viewJob&&api("/api/cancel/"+viewJob,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{});
+$("#resumeBtn").onclick=()=>api("/api/queue/resume",{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{});
+$("#qClear").onclick=()=>api("/api/queue/clear",{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{});
+$("#qHide").onclick=()=>{ for(const j of (lastQ?lastQ.jobs:[])) if(!["queued","running"].includes(j.state))hiddenJobs.add(j.id); renderQueue() };
 
-async function poll(){
-  let j; try{ j=await api("/api/status/"+jobId) }catch(e){ return }
-  $("#phase").textContent=j.phase+(j.total?" — "+j.done+" / "+j.total:"");
-  $("#barFill").style.width=(j.total?100*j.done/j.total:(j.state==="running"?3:0))+"%";
-  const l=$("#log"); l.textContent=j.log.join("\n"); l.scrollTop=l.scrollHeight;
-  if(j.state!=="running"){ clearInterval(timer); setRunning(false); finish(j); }
+function el(tag,cls,text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!==undefined)e.textContent=text; return e }
+function qrow(name,badge,badgeCls,pct,selected,onclick){
+  const li=el("li",selected?"sel":""); li.onclick=onclick;
+  const nm=el("div","nm"); nm.appendChild(el("b","",name));
+  if(pct!==null){ const bar=el("div","bar"); const i=el("i"); i.style.width=pct+"%"; bar.appendChild(i); nm.appendChild(bar) }
+  li.appendChild(nm); li.appendChild(el("span","bd "+badgeCls,badge));
+  const acts=el("div","acts"); li.appendChild(acts); return {li,acts}
 }
+function btn(label,fn,cls){ const b=el("button",cls||"sec sm",label); b.type="button"; b.onclick=e=>{e.stopPropagation();fn()}; return b }
+function renderQueue(){
+  const L=$("#qList"); L.innerHTML="";
+  const jobs=(lastQ?lastQ.jobs:[]).filter(j=>!hiddenJobs.has(j.id));
+  const linked=new Set(items.filter(it=>it.job).map(it=>it.job));
+  for(const j of jobs){
+    const run=j.state==="running";
+    const pct=run?(j.total?Math.round(100*j.done/j.total):3):null;
+    const badge=run?(j.phase+(j.total?" "+j.done+"/"+j.total:"")):STATE_TXT[j.state]+(j.dry&&j.state==="done"?" (analisi)":"");
+    const r=qrow(j.name,badge,j.state==="done"?"ok":(j.state==="error"?"bad":""),pct,viewJob===j.id,()=>{ viewJob=j.id; autoFollow=false; shownKey=null; refreshView() });
+    if(j.state==="queued"||run) r.acts.appendChild(btn("Annulla",()=>api("/api/cancel/"+j.id,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{})));
+    if(j.state==="done"&&j.downloadable){ const a=el("a","sm","Scarica"); a.href="/api/download/"+j.id+"?t="+encodeURIComponent(T); a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
+    if(j.state==="done"&&j.saved_to) r.acts.appendChild(btn("Apri cartella",()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#msg").textContent=e.message})));
+    if(j.state==="error"||j.state==="cancelled") r.acts.appendChild(btn("Riprova",()=>retryJob(j.id)));
+    if(!["queued","running"].includes(j.state)) r.acts.appendChild(btn("✕",()=>{hiddenJobs.add(j.id);renderQueue()}));
+    L.appendChild(r.li);
+  }
+  items.forEach((it,i)=>{
+    if(it.job&&linked.has(it.job)&&jobs.some(j=>j.id===it.job))return;
+    if(it.job)return;
+    const badge=it.status==="upload"?"Caricamento "+it.pct+"%":(it.status==="fail"?it.err:"Pronta");
+    const r=qrow(it.name,badge,it.status==="fail"?"bad":"",it.status==="upload"?it.pct:null,sel===i,()=>selectItem(i));
+    if(it.status==="ready") r.acts.appendChild(btn("Contesto",()=>selectItem(i)));
+    r.acts.appendChild(btn("✕",()=>{ saveFields(); const cur=items[sel]; items.splice(i,1); const ni=items.indexOf(cur); if(ni>=0){sel=ni}else{sel=-1; selectItem(items.length?items.length-1:-1)} syncGo(); renderQueue() }));
+    L.appendChild(r.li);
+  });
+  $("#queueCard").classList.toggle("hide",!L.children.length&&!(lastQ&&lastQ.paused));
+  const pb=lastQ&&lastQ.paused; $("#pauseBox").classList.toggle("hide",!pb); if(pb)$("#pauseMsg").textContent=lastQ.pause_msg;
+}
+async function retryJob(id){
+  try{ const r=await api("/api/retry/"+id,{method:"POST",body:"{}"}); hiddenJobs.add(id); viewJob=r.job_id; autoFollow=true; shownKey=null; $("#result").classList.add("hide"); pollQueue() }
+  catch(e){ $("#msg").textContent=e.message }
+}
+
+async function pollQueue(){
+  let q; try{ q=await api("/api/queue") }catch(e){ return }
+  lastQ=q;
+  if(autoFollow){ const run=q.jobs.find(j=>j.state==="running"); if(run&&viewJob!==run.id){viewJob=run.id;shownKey=null} else if(!viewJob&&q.jobs.length){viewJob=q.jobs[q.jobs.length-1].id} }
+  for(const j of q.jobs) if(j.state==="done"&&!j.dry&&!seenDone.has(j.id)){ seenDone.add(j.id); histRefresh() }
+  renderQueue(); await refreshView();
+}
+async function refreshView(){
+  if(!viewJob)return;
+  let j; try{ j=await api("/api/status/"+viewJob) }catch(e){ return }
+  const live=j.state==="queued"||j.state==="running";
+  $("#progress").classList.remove("hide");
+  $("#phase").textContent=(j.name?j.name+" — ":"")+j.phase+(j.total?" — "+j.done+" / "+j.total:"");
+  $("#barFill").style.width=(j.total?100*j.done/j.total:(j.state==="running"?3:0))+"%";
+  const l=$("#log"); l.textContent=j.log.join("\n"); if(live)l.scrollTop=l.scrollHeight;
+  $("#stop").classList.toggle("hide",!live);
+  if(live){ $("#result").classList.add("hide"); shownKey=null; return }
+  const key=viewJob+":"+j.state;
+  if(shownKey!==key){ shownKey=key; finish(j) }
+}
+
+/* ---- cronologia ---- */
+async function histRefresh(){
+  let h; try{ h=await api("/api/history") }catch(e){ return }
+  const L=$("#histList"); L.innerHTML="";
+  $("#histCard").classList.toggle("hide",!h.entries.length);
+  for(const e of h.entries){
+    const li=el("li",""); li.style.cursor="default";
+    const nm=el("div","nm"); nm.appendChild(el("b","",e.name));
+    nm.appendChild(el("div","meta",[e.lang,e.finished,e.translated+" stringhe",e.kept_original?e.kept_original+" lasciate originali":"",e.warnings.length?e.warnings.length+" avvisi":""].filter(Boolean).join(" · ")+(e.mode==="folder"?" · salvata in "+e.saved_to:"")));
+    if(e.warnings.length||e.failures.length){ const d=el("details"); d.appendChild(el("summary","","Dettagli")); const ul=el("ul");
+      for(const t of [...e.failures,...e.warnings].slice(0,100))ul.appendChild(el("li","",t)); ul.querySelectorAll("li").forEach(x=>{x.style.cssText="border:0;padding:0;margin:0;display:list-item;cursor:default"}); d.appendChild(ul); nm.appendChild(d) }
+    li.appendChild(nm);
+    const acts=el("div","acts"); li.appendChild(acts);
+    if(!e.available) acts.appendChild(el("span","bd bad","non più disponibile"));
+    else if(e.mode==="zip"){ const a=el("a","sm","Scarica"); a.href="/api/history/"+e.id+"/download?t="+encodeURIComponent(T); acts.appendChild(a) }
+    else acts.appendChild(btn("Apri cartella",()=>api("/api/open",{method:"POST",body:JSON.stringify({path:e.saved_to})}).catch(x=>{$("#msg").textContent=x.message})));
+    acts.appendChild(btn("Elimina",async()=>{
+      const msg=e.mode==="zip"?"Eliminare \""+e.name+"\" dalla cronologia? Il file zip salvato verrà cancellato.":"Togliere \""+e.name+"\" dalla cronologia? La cartella sul tuo PC non viene toccata.";
+      if(!confirm(msg))return; try{ await api("/api/history/delete",{method:"POST",body:JSON.stringify({id:e.id})}) }catch(x){} histRefresh() }));
+    L.appendChild(li);
+  }
+  $("#histInfo").textContent=h.bytes?"Spazio occupato dai file scaricabili: "+fmt(h.bytes):"";
+}
+$("#histClear").onclick=async()=>{ if(!confirm("Svuotare tutta la cronologia? Gli zip conservati verranno cancellati; le cartelle salvate sul PC no."))return; try{ await api("/api/history/clear",{method:"POST",body:"{}"}) }catch(e){} histRefresh() };
+setInterval(pollQueue,800); pollQueue(); histRefresh();
+
 function li(parent,items,max){ parent.innerHTML=""; for(const t of items.slice(0,max)){const e=document.createElement("li");e.textContent=t;parent.appendChild(e)} if(items.length>max){const e=document.createElement("li");e.textContent="... e altre "+(items.length-max);parent.appendChild(e)} }
 function finish(j){
   const R=$("#result"); R.classList.remove("hide");
   $("#stats").innerHTML=""; $("#resAction").innerHTML=""; $("#warnBox").classList.add("hide"); $("#failBox").classList.add("hide"); $("#resNote").textContent="";
   if(j.state==="cancelled"){ $("#resTitle").textContent="Annullato"; $("#resNote").textContent="Nessun file prodotto."; return }
   if(j.state==="error"){ $("#resTitle").textContent="Errore"; const p=document.createElement("p"); p.className="err"; p.textContent=j.error; $("#resAction").appendChild(p);
-    if(j.phase==="Interrotto"){ const b=document.createElement("button"); b.className="sec"; b.textContent="Riprendi"; b.onclick=()=>{ R.classList.add("hide"); $("#go").click() }; $("#resAction").appendChild(b) }
+    if(j.phase==="Interrotto"){ const id=viewJob; const b=document.createElement("button"); b.className="sec"; b.textContent="Riprendi"; b.onclick=()=>retryJob(id); $("#resAction").appendChild(b) }
     memRefresh(); return }
   const r=j.report;
   $("#resTitle").textContent=j.dry?"Analisi completata":"Traduzione completata";
@@ -287,12 +422,12 @@ function finish(j){
     const b=document.createElement("button"); b.textContent="Apri la cartella"; b.onclick=()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#resNote").textContent=e.message}); $("#resAction").appendChild(b);
     $("#resNote").textContent="Fai una copia di sicurezza prima di installarla e controlla i termini del gioco: la lista dei campi e la verifica coprono la struttura, non la qualit\u00e0 della traduzione.";
   } else if(!j.dry){
-    const a=document.createElement("a"); a.className="dl"; a.textContent="Scarica la mod tradotta"; a.href="/api/download/"+jobId+"?t="+encodeURIComponent(T); $("#resAction").appendChild(a);
+    const a=document.createElement("a"); a.className="dl"; a.textContent="Scarica la mod tradotta"; a.href="/api/download/"+viewJob+"?t="+encodeURIComponent(T); $("#resAction").appendChild(a);
     $("#resNote").textContent="Fai una copia di sicurezza prima di installarla e controlla i termini del gioco: la lista dei campi e la verifica coprono la struttura, non la qualità della traduzione.";
   } else { $("#resNote").textContent="Nessuna chiamata AI e nessun file prodotto."; }
   if(r.warnings.length){ $("#warnBox").classList.remove("hide"); $("#warnSum").textContent="Avvisi ("+r.warnings.length+")"; li($("#warnList"),r.warnings,100) }
   if(r.failures.length){ $("#failBox").classList.remove("hide"); $("#failSum").textContent="Stringhe non tradotte o rifiutate ("+r.failures.length+")"; li($("#failList"),r.failures,100);
-    if(!j.dry){ const b=document.createElement("button"); b.className="sec"; b.style.marginLeft="10px"; b.textContent="Riprova le fallite"; b.onclick=()=>{ R.classList.add("hide"); $("#go").click() }; $("#resAction").appendChild(b);
+    if(!j.dry){ const b=document.createElement("button"); b.className="sec"; b.style.marginLeft="10px"; b.textContent="Riprova le fallite"; const id=viewJob; b.onclick=()=>retryJob(id); $("#resAction").appendChild(b);
       $("#resNote").textContent+=" Le gi\u00e0 tradotte sono in memoria: riprovando si rifanno solo quelle fallite." } }
   memRefresh();
 }

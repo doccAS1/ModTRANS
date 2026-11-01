@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import context as ctx
 from .gui_page import PAGE
+from .history import History
 from .pipeline import LANGS, OutputError, check_writable_dir, clean_name, run
 from .translator import (DEFAULT_MODEL, AbortRun, AnthropicBackend, OpenAICompatBackend, Translator,
                          clear_memory, memory_info, store_for)
@@ -36,9 +39,12 @@ class Cancelled(Exception):
 
 
 class Job:
-    def __init__(self, dry: bool, name: str, lang: str):
+    def __init__(self, dry: bool, name: str, lang: str, s: dict | None = None):
         self.id = uuid.uuid4().hex
-        self.state, self.phase, self.dry = "running", "Avvio", dry
+        self.state, self.phase, self.dry = "queued", "In coda", dry
+        self.s = s or {}                  # impostazioni di questa mod (la chiave API resta solo in memoria)
+        self.service_down = False         # il servizio AI non risponde: la coda si mette in pausa
+        self.upload_id = self.s.get("upload_id")
         self.done = self.total = 0
         self.log: list[str] = []
         self.report = self.error = self.out = self.saved_to = None
@@ -53,8 +59,76 @@ class App:
         self.uploads: dict[str, tuple[Path, str]] = {}
         self.jobs: dict[str, Job] = {}
         self.outputs: set[str] = set()   # percorsi prodotti da noi: gli unici che "Apri cartella" può aprire
+        self.history = History()
+        for e in self.history.list():
+            if e.get("saved_to"):
+                self.outputs.add(str(Path(e["saved_to"]).resolve()))
+        self.order: list[str] = []       # ordine di arrivo delle mod
+        self.pending: collections.deque[Job] = collections.deque()
+        self.cv = threading.Condition()
+        self.paused, self.pause_msg, self.stopping = False, "", False
+        self.worker: threading.Thread | None = None
+
+    # -- coda: una mod alla volta, la successiva parte da sola
+    def enqueue(self, job: Job) -> int:
+        with self.cv:
+            self.jobs[job.id] = job
+            self.order.append(job.id)
+            self.pending.append(job)
+            if self.worker is None:
+                self.worker = threading.Thread(target=self._work, daemon=True)
+                self.worker.start()
+            self.cv.notify_all()
+            return len(self.pending)
+
+    def cancel(self, job: Job) -> None:
+        with self.cv:
+            job.cancel.set()
+            if job in self.pending:                      # non è ancora partita: si toglie subito dalla coda
+                self.pending.remove(job)
+                job.state, job.phase = "cancelled", "Annullato"
+                self.cv.notify_all()
+
+    def set_paused(self, paused: bool, msg: str = "") -> None:
+        with self.cv:
+            self.paused, self.pause_msg = paused, msg if paused else ""
+            self.cv.notify_all()
+
+    def _work(self) -> None:
+        while True:
+            with self.cv:
+                while not self.stopping and (self.paused or not self.pending):
+                    self.cv.wait(timeout=1)
+                if self.stopping:
+                    return
+                job = self.pending.popleft()
+                job.state, job.phase = "running", "Avvio"
+            run_job(self, job, job.s)
+            if job.state == "done" and not job.dry:
+                self._record(job)
+                if not (job.report or {}).get("failures"):
+                    job.s.pop("api_key", None)           # finito bene: la chiave non serve più nemmeno in memoria
+            if job.service_down:
+                self.set_paused(True, job.error or "Il servizio AI non risponde")
+
+    def _record(self, job: Job) -> None:
+        r = job.report or {}
+        entry = {"id": job.id, "name": job.name, "lang": job.lang, "source": job.s.get("source"),
+                 "mode": "folder" if job.saved_to else "zip", "saved_to": job.saved_to,
+                 "translated": r.get("translated", 0), "kept_original": r.get("kept_original", 0),
+                 "files": len(r.get("files", [])), "from_memory": r.get("from_memory", 0),
+                 "requests": r.get("requests", 0), "warnings": r.get("warnings", []), "failures": r.get("failures", [])}
+        try:
+            new = self.history.add(entry, job.out if entry["mode"] == "zip" else None)
+            if new is not None:
+                job.out = new                            # lo zip ora vive nella cronologia
+        except OSError as e:
+            job.log.append(f"Non sono riuscito a salvare la mod nella cronologia: {e}")
 
     def close(self):
+        with self.cv:
+            self.stopping = True
+            self.cv.notify_all()
         shutil.rmtree(self.work, ignore_errors=True)
 
 
@@ -180,6 +254,7 @@ def run_job(app: App, job: Job, s: dict) -> None:
             except Exception as e:  # noqa: BLE001
                 hint = ("Controlla che il server sia acceso e l'indirizzo giusto."
                         if s["provider"] == "openai" else "Controlla la chiave API.")
+                job.service_down = True
                 raise RuntimeError(f"Connessione al servizio AI non riuscita. {hint} Dettaglio: {e}") from None
         store = None if job.dry else store_for(s["lang"], f"{s['provider']}-{s.get('model') or DEFAULT_MODEL}", {**(game_gl or {}), **(glossary or {})} or None)
         tr = Translator(backend, s["lang"].capitalize(), glossary,
@@ -222,11 +297,26 @@ def run_job(app: App, job: Job, s: dict) -> None:
     except Cancelled:
         job.state, job.phase = "cancelled", "Annullato"
     except AbortRun as e:
+        job.service_down = True
         job.state, job.phase, job.error = "error", "Interrotto", str(e)
         job.log.append(f"Interrotto: {e}")
     except Exception as e:  # noqa: BLE001 - qualunque errore va mostrato all'utente
         job.state, job.phase, job.error = "error", "Errore", f"{e}"
         job.log.append(f"Errore: {e}")
+
+
+ID_OK = re.compile(r"[0-9a-f]{32}")
+
+
+def queue_view(app: App) -> dict:
+    """Stato di tutte le mod della sessione, nell'ordine in cui sono state aggiunte."""
+    jobs = []
+    for jid in app.order:
+        j = app.jobs[jid]
+        jobs.append({"id": j.id, "name": j.name, "lang": j.lang, "state": j.state, "phase": j.phase, "done": j.done,
+                     "total": j.total, "dry": j.dry, "saved_to": j.saved_to, "error": j.error,
+                     "upload_id": j.upload_id, "downloadable": bool(j.out and j.out.exists())})
+    return {"jobs": jobs, "paused": app.paused, "pause_msg": app.pause_msg}
 
 
 def make_handler(app: App, port_holder: list):
@@ -253,6 +343,20 @@ def make_handler(app: App, port_holder: list):
         def _auth(self, q):
             tok = self.headers.get("X-Token") or (q.get("t") or [""])[0]
             return secrets.compare_digest(tok, app.token)
+
+        def _send_zip(self, path: Path, fname: str):
+            try:
+                size = path.stat().st_size
+                f = open(path, "rb")
+            except OSError:
+                return self._json({"error": "File non più disponibile"}, 404)
+            with f:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.end_headers()
+                shutil.copyfileobj(f, self.wfile)
 
         def _body_json(self):
             n = int(self.headers.get("Content-Length") or 0)
@@ -282,25 +386,27 @@ def make_handler(app: App, port_holder: list):
                 return self._json(memory_info())
             if u.path == "/api/browse":
                 return self._json(browse((q.get("path") or [""])[0]))
+            if u.path == "/api/queue":
+                return self._json(queue_view(app))
+            if u.path == "/api/history":
+                return self._json({"entries": app.history.list(), "bytes": app.history.total_bytes()})
+            m = re.fullmatch(r"/api/history/([0-9a-f]{32})/download", u.path)
+            if m:
+                e = app.history.get(m.group(1))
+                p = app.history.zip_path(m.group(1))
+                if not e or e.get("mode") != "zip" or not e["available"] or p is None:
+                    return self._json({"error": "File non più disponibile"}, 404)
+                return self._send_zip(p, f"{Path(e['name']).stem}_{e['lang']}.zip")
             m = re.fullmatch(r"/api/status/([0-9a-f]{32})", u.path)
             if m and m.group(1) in app.jobs:
                 j = app.jobs[m.group(1)]
                 return self._json({"state": j.state, "phase": j.phase, "done": j.done, "total": j.total,
                                    "log": j.log[-200:], "report": j.report, "error": j.error, "dry": j.dry,
-                                   "saved_to": j.saved_to})
+                                   "saved_to": j.saved_to, "name": j.name, "lang": j.lang})
             m = re.fullmatch(r"/api/download/([0-9a-f]{32})", u.path)
             if m and m.group(1) in app.jobs and app.jobs[m.group(1)].out:
                 j = app.jobs[m.group(1)]
-                size = j.out.stat().st_size
-                fname = f"{Path(j.name).stem}_{j.lang}.zip"
-                self.send_response(200)
-                self.send_header("Content-Type", "application/zip")
-                self.send_header("Content-Length", str(size))
-                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
-                self.end_headers()
-                with open(j.out, "rb") as f:
-                    shutil.copyfileobj(f, self.wfile)
-                return
+                return self._send_zip(j.out, f"{Path(j.name).stem}_{j.lang}.zip")
             self._json({"error": "non trovato"}, 404)
 
         # ------------------------------------------------------------ POST
@@ -344,11 +450,34 @@ def make_handler(app: App, port_holder: list):
                         if not (s.get("out_dir") or "").strip():
                             return self._json({"error": "Scegli la cartella dove salvare"}, 400)
                         check_writable_dir(Path(s["out_dir"].strip()))   # ValueError con messaggio chiaro
-                    job = Job(bool(s.get("dry_run")), app.uploads[s["upload_id"]][1], s["lang"])
-                    app.jobs[job.id] = job
+                    job = Job(bool(s.get("dry_run")), app.uploads[s["upload_id"]][1], s["lang"], s)
                     save_settings(s)
-                    threading.Thread(target=run_job, args=(app, job, s), daemon=True).start()
+                    position = app.enqueue(job)
+                    return self._json({"job_id": job.id, "position": position})
+                if u.path == "/api/queue/resume":
+                    app.set_paused(False)
+                    return self._json({"ok": True})
+                if u.path == "/api/queue/clear":                     # toglie tutte le mod ancora in attesa
+                    with app.cv:
+                        waiting = list(app.pending)
+                    for j in waiting:
+                        app.cancel(j)
+                    return self._json({"cancelled": len(waiting)})
+                m = re.fullmatch(r"/api/retry/([0-9a-f]{32})", u.path)
+                if m and m.group(1) in app.jobs:
+                    old = app.jobs[m.group(1)]
+                    redo_failed = old.state == "done" and not old.dry and bool((old.report or {}).get("failures"))
+                    if not (old.state in ("error", "cancelled") or redo_failed) or old.upload_id not in app.uploads:
+                        return self._json({"error": "Questa mod non si può rimettere in coda"}, 400)
+                    job = Job(old.dry, old.name, old.lang, dict(old.s))
+                    app.enqueue(job)
                     return self._json({"job_id": job.id})
+                if u.path == "/api/history/delete":
+                    b = self._body_json()
+                    ok = ID_OK.fullmatch(str(b.get("id", ""))) and app.history.delete(b["id"])
+                    return self._json({"ok": bool(ok)}) if ok else self._json({"error": "Voce non trovata"}, 404)
+                if u.path == "/api/history/clear":
+                    return self._json({"cleared": app.history.clear()})
                 if u.path == "/api/memory/clear":
                     return self._json({"cleared": clear_memory()})
                 if u.path == "/api/mkdir":
@@ -373,7 +502,7 @@ def make_handler(app: App, port_holder: list):
                     return self._json({"ok": True})
                 m = re.fullmatch(r"/api/cancel/([0-9a-f]{32})", u.path)
                 if m and m.group(1) in app.jobs:
-                    app.jobs[m.group(1)].cancel.set()
+                    app.cancel(app.jobs[m.group(1)])
                     return self._json({"ok": True})
             except (ctx.ContextError, OutputError) as e:
                 return self._json({"error": str(e)}, 400)

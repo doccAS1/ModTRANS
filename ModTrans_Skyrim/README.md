@@ -41,6 +41,12 @@ Input: cartella, `.zip`, `.7z` o singolo `.esp/.esm/.esl`. Output: zip (o cartel
 - **Interfaccia:** in "Dove salvare" scegli *Scarica dal browser* oppure una **cartella** del tuo PC (con selettore e "Nuova cartella"), come zip oppure come cartella già pronta da copiare in `Data`. Non sovrascrive mai: se il nome esiste aggiunge " (2)". Finito, "Apri la cartella".
 - **Riga di comando:** `-o percorso.zip`, `--out-dir CARTELLA`, `--as-folder` (cartella invece di zip), `--overwrite`.
 
+## Coda e cronologia (interfaccia)
+- **Coda:** trascina più mod insieme (o aggiungine altre mentre una è in corso) e premi *Traduci*: vengono tradotte **una alla volta**, la successiva parte da sola. Ogni mod ha il suo contesto (clic su "Contesto" prima di avviare); le impostazioni (lingua, servizio AI, cartella di output...) sono quelle del momento in cui premi *Traduci*. Puoi annullare una mod in attesa, annullare tutte quelle in attesa o riprovare una mod fallita o annullata ("Riprova"; per una mod finita con stringhe non tradotte, "Riprova le fallite" riusa la memoria e rifà solo quelle).
+- **Pausa automatica:** se il servizio AI non risponde o rifiuta la chiave, la coda si ferma con un avviso invece di far fallire tutte le mod una dopo l'altra. "Riprendi la coda" la fa ripartire dalla successiva.
+- **Cronologia:** ogni mod tradotta resta in elenco anche dopo aver chiuso il programma, con data, numeri, avvisi e un pulsante per **scaricare** lo zip (o aprire la cartella, se l'hai salvata sul PC), anche mentre un'altra mod è in traduzione. Gli zip sono in `~/.skyrimtrans/history` (occupano spazio: "Elimina" e "Svuota la cronologia" li cancellano). Togliere dalla cronologia una mod salvata in una tua cartella **non** cancella mai quella cartella.
+- Le chiavi API restano solo in memoria e vengono dimenticate quando la mod finisce senza stringhe da riprovare.
+
 ## Memoria e ripresa
 Ogni traduzione riuscita viene salvata subito in `~/.skyrimtrans/memory` (una per lingua + modello + glossario). Se la corsa si interrompe (rete, limiti del servizio, chiusura del programma) rilanci la stessa mod e riparte da dove era: nulla viene rifatto né ripagato. Le stesse traduzioni vengono riusate in altre mod.
 - Errori temporanei e limiti di richieste: nuovi tentativi con attesa crescente (rispetta `Retry-After`). Chiave/modello errati: ci si ferma subito con un messaggio chiaro. Tre lotti di fila senza risposta valida: la corsa si ferma, il lavoro fatto resta salvato.
