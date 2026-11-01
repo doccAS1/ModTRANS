@@ -24,6 +24,7 @@ class FakeAI:
         if not gated:
             self.gate.set()
         self.requests = 0
+        self.models: set[str] = set()                   # modelli visti nelle richieste di traduzione
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -34,6 +35,7 @@ class FakeAI:
                     items = json.loads(user)
                     outer.gate.wait(10)
                     outer.requests += 1
+                    outer.models.add(body["model"])
                     reply = json.dumps([{"id": i["id"], "text": "IT " + i["text"]} for i in items])
                 except ValueError:
                     reply = "OK"                                   # il controllo iniziale della connessione
@@ -134,7 +136,7 @@ def test_queue_pauses_when_the_service_is_down_and_retry_works(monkeypatch, tmp_
     assert wait(c, b)["state"] == "done" and queue(c)["paused"] is False
     # "Riprova" rimette in coda la stessa mod con le stesse impostazioni; una mod finita bene non si può riprovare
     assert c.call(f"/api/retry/{b}", {})[0] == 400
-    app.jobs[a].s["base_url"] = ai.url                                  # (l'utente ha riacceso il server)
+    app.jobs[a].own["base_url"] = ai.url                                # (l'utente ha riacceso il server)
     again = json.loads(c.call(f"/api/retry/{a}", {})[1])["job_id"]
     assert again != a and wait(c, again)["state"] == "done"
     ai.close(); httpd.shutdown(); httpd.server_close()
