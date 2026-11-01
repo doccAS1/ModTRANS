@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -150,8 +151,16 @@ def check_writable_dir(d: Path) -> Path:
     return d
 
 
+_OUT_LOCK = threading.Lock()      # code in parallelo: due mod con lo stesso nome non devono scegliere lo stesso nome libero
+
+
 def write_output(out: Path, dest: Path, as_folder: bool, overwrite: bool = False) -> Path:
     """Scrive il risultato come zip o come cartella. Di default non sovrascrive: sceglie un nome libero."""
+    with _OUT_LOCK:
+        return _write_output(out, dest, as_folder, overwrite)
+
+
+def _write_output(out: Path, dest: Path, as_folder: bool, overwrite: bool = False) -> Path:
     if not overwrite:
         dest = unique_path(dest)
     elif dest.exists():

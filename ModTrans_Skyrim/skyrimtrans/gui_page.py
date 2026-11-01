@@ -54,6 +54,13 @@ a.dl{display:inline-block;text-decoration:none;background:var(--accent);color:va
 button.sm,a.sm{padding:4px 10px;font-size:13px;border-radius:6px}
 a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);font-weight:600}
 .banner{background:var(--ok-bg);border:1px solid var(--warn);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:14px}
+.lane{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:12px}
+.lane.paused{border-color:var(--warn)}
+.lane .lh{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.lane .lh b{font-size:14px}.lane .lh .sum{font-size:12px;color:var(--mute);flex:1;min-width:120px}
+.lane .pm{font-size:13px;color:var(--warn);margin:0 0 8px}
+.lane .empty{font-size:13px;color:var(--mute);margin:0 0 4px}
+.stage h3{font-size:12px;margin:0 0 6px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .hist .meta{font-size:12px;color:var(--mute)}
 .hist details{margin:4px 0 0}
 </style>
@@ -69,10 +76,10 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
 </section>
 
 <section class="card hide" id="queueCard">
-  <h2>Coda</h2>
-  <div id="pauseBox" class="banner hide"><b>Coda in pausa.</b> <span id="pauseMsg"></span><br><button class="sm" id="resumeBtn" type="button" style="margin-top:8px">Riprendi la coda</button></div>
-  <ul class="q" id="qList"></ul>
-  <div class="actions"><button class="sec sm" id="qClear" type="button">Annulla le mod in attesa</button><button class="sec sm" id="qHide" type="button">Nascondi le finite</button></div>
+  <h2>Code</h2>
+  <div id="stage" class="stage hide"><h3>Da avviare</h3><ul class="q" id="stageList"></ul></div>
+  <div id="lanes"></div>
+  <div class="actions"><button class="sec sm" id="qHide" type="button">Nascondi le finite</button></div>
 </section>
 
 <section class="card" id="ctxCard">
@@ -131,6 +138,8 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
     <p class="note" style="margin:-4px 0 10px">Non sovrascrive mai nulla: se il nome esiste gi&agrave; aggiunge (2), (3)...</p>
   </div>
   <div class="field" style="margin-top:14px"><label class="check"><input type="checkbox" id="dry"><span>Solo analisi<small>Non chiama nessuna AI: mostra quante stringhe verrebbero tradotte.</small></span></label></div>
+  <div class="field" id="laneBox" style="margin-top:14px"><label for="laneSel">Metti le mod in</label><select id="laneSel"><option value="new">Una nuova coda (con le impostazioni qui sopra)</option></select>
+    <p class="note" id="laneNote" style="margin:6px 0 0"></p></div>
   <div class="actions"><button id="go" disabled>Traduci</button><button id="stop" class="sec hide">Annulla</button><span id="msg" class="err"></span></div>
 </section>
 
@@ -167,7 +176,7 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
 <script>
 const T="__TOKEN__", D=__DEFAULTS__;
 const $=s=>document.querySelector(s);
-let items=[], sel=-1, viewJob=null, autoFollow=true, uploadId=null, briefTouched=false, lastQ=null, shownKey=null;
+let laneSel="new", items=[], sel=-1, viewJob=null, autoFollow=true, uploadId=null, briefTouched=false, lastQ=null, shownKey=null;
 const seenDone=new Set(), hiddenJobs=new Set();
 const STATE_TXT={queued:"In attesa",running:"In corso",done:"Completata",error:"Errore",cancelled:"Annullata"};
 
@@ -293,17 +302,22 @@ async function memRefresh(){ try{ const m=await api("/api/memory"); $("#memInfo"
 memRefresh();
 $("#memClear").onclick=async e=>{ e.preventDefault(); if(!confirm("Cancellare tutte le traduzioni salvate? Dovranno essere rifatte (e ripagate) la prossima volta."))return; await api("/api/memory/clear",{method:"POST",body:"{}"}); memRefresh() };
 
+function currentSettings(){
+  const p=PRESETS[$("#preset").value];
+  return {lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
+    model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim(),
+    batch_items:parseInt($("#batch").value)||40,nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,shorten:$("#shorten").checked,review:$("#review").checked,glossary:$("#glossary").value.trim(),game_data:$("#game_data").value.trim()};
+}
 $("#go").onclick=async()=>{
   saveFields(); $("#msg").textContent="";
   const ready=items.filter(it=>it.status==="ready"&&!it.job);
   if(!ready.length)return;
-  const p=PRESETS[$("#preset").value];
-  const base={lang:$("#lang").value,source:$("#source").value,provider:p.provider,preset:$("#preset").value,
-    model:$("#model").value.trim(),base_url:$("#base_url").value.trim(),api_key:$("#api_key").value.trim(),
-    batch_items:parseInt($("#batch").value)||40,nexus_game:$("#nexus_game").value,out_where:$("#out_where").value,out_dir:$("#out_dir").value.trim(),out_mode:$("#out_mode").value,use_memory:$("#use_memory").checked,shorten:$("#shorten").checked,review:$("#review").checked,glossary:$("#glossary").value.trim(),game_data:$("#game_data").value.trim(),dry_run:$("#dry").checked};
-  let first=null;
+  const base=currentSettings();
+  let first=null, target=$("#laneSel").value;
   for(const it of ready){
-    try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify({...base,upload_id:it.upload_id,brief:it.brief.trim()})}); it.job=j.job_id; if(!first)first=j.job_id }
+    const own={upload_id:it.upload_id,brief:it.brief.trim(),dry_run:$("#dry").checked};
+    try{ const j=await api("/api/start",{method:"POST",body:JSON.stringify(target==="new"?{...base,...own,lane_id:"new"}:{...own,lane_id:target})});
+         it.job=j.job_id; if(!first)first=j.job_id; if(target==="new"){ target=j.lane_id; $("#laneSel").dataset.want=target } }
     catch(e){ $("#msg").textContent=(ready.length>1?it.name+": ":"")+e.message; break }
   }
   if(first){ viewJob=first; autoFollow=true; shownKey=null; $("#result").classList.add("hide") }
@@ -311,8 +325,6 @@ $("#go").onclick=async()=>{
   syncGo(); pollQueue();
 };
 $("#stop").onclick=()=>viewJob&&api("/api/cancel/"+viewJob,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{});
-$("#resumeBtn").onclick=()=>api("/api/queue/resume",{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{});
-$("#qClear").onclick=()=>api("/api/queue/clear",{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{});
 $("#qHide").onclick=()=>{ for(const j of (lastQ?lastQ.jobs:[])) if(!["queued","running"].includes(j.state))hiddenJobs.add(j.id); renderQueue() };
 
 function el(tag,cls,text){ const e=document.createElement(tag); if(cls)e.className=cls; if(text!==undefined)e.textContent=text; return e }
@@ -324,33 +336,58 @@ function qrow(name,badge,badgeCls,pct,selected,onclick){
   const acts=el("div","acts"); li.appendChild(acts); return {li,acts}
 }
 function btn(label,fn,cls){ const b=el("button",cls||"sec sm",label); b.type="button"; b.onclick=e=>{e.stopPropagation();fn()}; return b }
+function jobRow(j){
+  const run=j.state==="running";
+  const pct=run?(j.total?Math.round(100*j.done/j.total):3):null;
+  const badge=run?(j.phase+(j.total?" "+j.done+"/"+j.total:"")):STATE_TXT[j.state]+(j.dry&&j.state==="done"?" (analisi)":"");
+  const r=qrow(j.name,badge,j.state==="done"?"ok":(j.state==="error"?"bad":""),pct,viewJob===j.id,()=>{ viewJob=j.id; autoFollow=false; shownKey=null; refreshView() });
+  if(j.state==="queued"||run) r.acts.appendChild(btn("Annulla",()=>api("/api/cancel/"+j.id,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{})));
+  if(j.state==="done"&&j.downloadable){ const a=el("a","sm","Scarica"); a.href="/api/download/"+j.id+"?t="+encodeURIComponent(T); a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
+  if(j.state==="done"&&j.saved_to) r.acts.appendChild(btn("Apri cartella",()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#msg").textContent=e.message})));
+  if(j.state==="error"||j.state==="cancelled") r.acts.appendChild(btn("Riprova",()=>retryJob(j.id)));
+  if(!["queued","running"].includes(j.state)) r.acts.appendChild(btn("✕",()=>{hiddenJobs.add(j.id);renderQueue()}));
+  return r.li;
+}
+function laneBox(l,jobs){
+  const box=el("div","lane"+(l.paused?" paused":""));
+  const h=el("div","lh"); h.appendChild(el("b","",l.name)); h.appendChild(el("span","sum",l.summary));
+  if(l.paused) h.appendChild(btn("Riprendi",()=>api("/api/queue/resume",{method:"POST",body:JSON.stringify({lane_id:l.id})}).then(pollQueue).catch(()=>{}),"sm"));
+  h.appendChild(btn("Usa le impostazioni qui sotto",async()=>{
+    const s=currentSettings(); try{ await api("/api/lane/update",{method:"POST",body:JSON.stringify({lane_id:l.id,settings:s})}); $("#msg").textContent=""; pollQueue() }catch(e){ $("#msg").textContent=e.message } }));
+  if(jobs.some(j=>j.state==="queued")) h.appendChild(btn("Annulla le in attesa",()=>api("/api/queue/clear",{method:"POST",body:JSON.stringify({lane_id:l.id})}).then(pollQueue).catch(()=>{})));
+  if(!l.busy) h.appendChild(btn("Chiudi",()=>api("/api/lane/close",{method:"POST",body:JSON.stringify({lane_id:l.id})}).then(pollQueue).catch(e=>{$("#msg").textContent=e.message})));
+  box.appendChild(h);
+  if(l.paused) box.appendChild(el("p","pm","In pausa: "+l.pause_msg));
+  const ul=el("ul","q"); for(const j of jobs)ul.appendChild(jobRow(j));
+  if(!jobs.length) box.appendChild(el("p","empty","Nessuna mod in questa coda."));
+  box.appendChild(ul); return box;
+}
+function renderLaneSelect(){
+  const sel2=$("#laneSel"), cur=sel2.dataset.want||sel2.value; delete sel2.dataset.want;
+  const ls=lastQ?lastQ.lanes:[];
+  sel2.innerHTML=""; const o=el("option","","Una nuova coda (con le impostazioni qui sopra)"); o.value="new"; sel2.appendChild(o);
+  for(const l of ls){ const x=el("option","",l.name+(l.summary?" — "+l.summary:"")); x.value=l.id; sel2.appendChild(x) }
+  sel2.value=ls.some(l=>l.id===cur)?cur:"new";
+  $("#laneNote").textContent=sel2.value==="new"?(ls.length?"Una coda nuova parte subito, in parallelo alle altre.":""):"Userà le impostazioni di questa coda (servizio AI, modello, lingua): quelle qui sopra valgono solo per le code nuove. Per cambiarle usa “Usa le impostazioni qui sotto” nella coda.";
+}
+$("#laneSel").onchange=renderLaneSelect;
 function renderQueue(){
-  const L=$("#qList"); L.innerHTML="";
-  const jobs=(lastQ?lastQ.jobs:[]).filter(j=>!hiddenJobs.has(j.id));
-  const linked=new Set(items.filter(it=>it.job).map(it=>it.job));
-  for(const j of jobs){
-    const run=j.state==="running";
-    const pct=run?(j.total?Math.round(100*j.done/j.total):3):null;
-    const badge=run?(j.phase+(j.total?" "+j.done+"/"+j.total:"")):STATE_TXT[j.state]+(j.dry&&j.state==="done"?" (analisi)":"");
-    const r=qrow(j.name,badge,j.state==="done"?"ok":(j.state==="error"?"bad":""),pct,viewJob===j.id,()=>{ viewJob=j.id; autoFollow=false; shownKey=null; refreshView() });
-    if(j.state==="queued"||run) r.acts.appendChild(btn("Annulla",()=>api("/api/cancel/"+j.id,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{})));
-    if(j.state==="done"&&j.downloadable){ const a=el("a","sm","Scarica"); a.href="/api/download/"+j.id+"?t="+encodeURIComponent(T); a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
-    if(j.state==="done"&&j.saved_to) r.acts.appendChild(btn("Apri cartella",()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#msg").textContent=e.message})));
-    if(j.state==="error"||j.state==="cancelled") r.acts.appendChild(btn("Riprova",()=>retryJob(j.id)));
-    if(!["queued","running"].includes(j.state)) r.acts.appendChild(btn("✕",()=>{hiddenJobs.add(j.id);renderQueue()}));
-    L.appendChild(r.li);
-  }
+  const ls=lastQ?lastQ.lanes:[];
+  const jobsAll=(lastQ?lastQ.jobs:[]).filter(j=>!hiddenJobs.has(j.id));
+  const LN=$("#lanes"); LN.innerHTML="";
+  for(const l of ls) LN.appendChild(laneBox(l,jobsAll.filter(j=>j.lane===l.id)));
+  const SL=$("#stageList"); SL.innerHTML="";
   items.forEach((it,i)=>{
-    if(it.job&&linked.has(it.job)&&jobs.some(j=>j.id===it.job))return;
     if(it.job)return;
     const badge=it.status==="upload"?"Caricamento "+it.pct+"%":(it.status==="fail"?it.err:"Pronta");
     const r=qrow(it.name,badge,it.status==="fail"?"bad":"",it.status==="upload"?it.pct:null,sel===i,()=>selectItem(i));
     if(it.status==="ready") r.acts.appendChild(btn("Contesto",()=>selectItem(i)));
     r.acts.appendChild(btn("✕",()=>{ saveFields(); const cur=items[sel]; items.splice(i,1); const ni=items.indexOf(cur); if(ni>=0){sel=ni}else{sel=-1; selectItem(items.length?items.length-1:-1)} syncGo(); renderQueue() }));
-    L.appendChild(r.li);
+    SL.appendChild(r.li);
   });
-  $("#queueCard").classList.toggle("hide",!L.children.length&&!(lastQ&&lastQ.paused));
-  const pb=lastQ&&lastQ.paused; $("#pauseBox").classList.toggle("hide",!pb); if(pb)$("#pauseMsg").textContent=lastQ.pause_msg;
+  $("#stage").classList.toggle("hide",!SL.children.length);
+  $("#queueCard").classList.toggle("hide",!SL.children.length&&!ls.length);
+  renderLaneSelect();
 }
 async function retryJob(id){
   try{ const r=await api("/api/retry/"+id,{method:"POST",body:"{}"}); hiddenJobs.add(id); viewJob=r.job_id; autoFollow=true; shownKey=null; $("#result").classList.add("hide"); pollQueue() }
