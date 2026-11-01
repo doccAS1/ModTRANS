@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -179,6 +180,9 @@ def memory_dir() -> Path:
     return Path(os.environ.get("SKYRIMTRANS_HOME") or (Path.home() / ".skyrimtrans")) / "memory"
 
 
+_STORE_LOCK = threading.Lock()      # più code possono scrivere lo stesso file di memoria: una riga alla volta, mai mescolate
+
+
 class TranslationStore:
     """Memoria delle traduzioni già fatte (un file JSONL per lingua+modello+glossario).
 
@@ -213,8 +217,9 @@ class TranslationStore:
             return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.writelines(json.dumps(o, ensure_ascii=False) + "\n" for o in self._pending)
+            data = "".join(json.dumps(o, ensure_ascii=False) + "\n" for o in self._pending)
+            with _STORE_LOCK, open(self.path, "a", encoding="utf-8") as f:
+                f.write(data)
         except OSError:
             pass  # la memoria è un di più: se il disco non è scrivibile si continua senza
         self._pending.clear()
