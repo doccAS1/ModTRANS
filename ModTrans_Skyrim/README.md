@@ -48,7 +48,11 @@ Input: cartella, `.zip`, `.7z` o singolo `.esp/.esm/.esl`. Output: zip (o cartel
   - Code con lo stesso modello e la stessa lingua condividono la memoria delle traduzioni: se due code traducono lo stesso testo nello stesso momento, lo pagano entrambe.
 - **Pausa automatica (per coda):** se il servizio AI non risponde o rifiuta la chiave, **quella** coda si ferma con un avviso, le altre continuano. "Riprendi" la fa ripartire dalla mod successiva.
 - **Cronologia:** ogni mod tradotta resta in elenco anche dopo aver chiuso il programma, con data, numeri, avvisi e un pulsante per **scaricare** lo zip (o aprire la cartella, se l'hai salvata sul PC), anche mentre un'altra mod è in traduzione. Gli zip sono in `~/.skyrimtrans/history` (occupano spazio: "Elimina" e "Svuota la cronologia" li cancellano). Togliere dalla cronologia una mod salvata in una tua cartella **non** cancella mai quella cartella.
-- Le chiavi API restano solo in memoria e vengono dimenticate quando la mod finisce senza stringhe da riprovare.
+- **Code e chiavi salvate (facoltativo):** di base le code e le chiavi API restano solo in memoria e spariscono alla chiusura del programma. Spunta **"Ricorda le code e le chiavi API su questo PC"** (accanto a *Traduci*) per ritrovarle al prossimo avvio, ognuna con la sua chiave. Come funziona:
+  - tutto è salvato in `~/.skyrimtrans/lanes.json` **in chiaro** (non cifrato), leggibile solo dal tuo utente (permessi 0600); non usarlo su un PC condiviso. Il programma chiede conferma prima di attivarlo.
+  - la chiave non torna mai al browser: nella pagina vedi solo "chiave salvata"; se modifichi le impostazioni di una coda lasciando vuota la chiave, resta quella già salvata.
+  - "Chiudi" su una coda la dimentica; togliendo la spunta il file con le chiavi viene **cancellato** e da quel momento non si salva più nulla. Le mod in attesa o in corso non vengono salvate, solo le code.
+  - se `lanes.json` è illeggibile viene ignorato (si parte con una coda vuota) senza bloccare il programma.
 
 ## Memoria e ripresa
 Ogni traduzione riuscita viene salvata subito in `~/.skyrimtrans/memory` (una per lingua + modello + glossario). Se la corsa si interrompe (rete, limiti del servizio, chiusura del programma) rilanci la stessa mod e riparte da dove era: nulla viene rifatto né ripagato. Le stesse traduzioni vengono riusate in altre mod.
