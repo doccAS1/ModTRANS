@@ -10,7 +10,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import bsa as bsa_mod, mcm, plugin as pl, strings_file as sf
+from . import bsa as bsa_mod, jsontext, mcm, plugin as pl, strings_file as sf
 from .context import offline_facts, plugin_info
 from .common import Unit
 from .protect import fit_encoding
@@ -108,6 +108,8 @@ def _wanted(rel: str, src_name: str) -> bool:
         return True
     if ext in STRINGS_EXT:
         return bool(re.search(f"_{src_name}$", p.stem, re.I))
+    if ext == ".json":
+        return True                              # si guarda dentro: conta solo se ha battute ("lines" con "id" e "text")
     return ext == ".txt" and "interface/translations" in rel.lower() and mcm.split_name(p.name)[1] == src_name
 
 
@@ -216,6 +218,20 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                     obj = sf.StringsFile(data, ext)
                     u, w = sf.extract_units(obj, enc, rel, ext[1:])
                     jobs.append(("strings", rel, obj, data))
+                elif ext == ".json":
+                    if len(data) > 30_000_000 or (b'"lines"' not in data and b'"text"' not in data):
+                        continue
+                    text, e, bom = mcm.decode(data)
+                    try:
+                        parsed = jsontext.parse(text)
+                    except (jsontext.JsonError, ValueError, IndexError) as ex:
+                        if '"lines"' in text:
+                            rep.warnings.append(f"{rel}: JSON non analizzabile, copiato senza modifiche ({ex})")
+                        continue
+                    u, w = jsontext.extract_units(parsed, rel), []
+                    if not u:
+                        continue
+                    jobs.append(("json", rel, (text, e, bom, parsed), data))
                 else:
                     text, e, bom = mcm.decode(data)
                     u, w = mcm.extract_units(text, rel), []
@@ -243,10 +259,12 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
         mcm_fit = lambda s: s
         # MCM è unicode: nessun vincolo di codifica
         by_kind = {"mcm": [x for x in all_units if x.kind == "ui_label"]}
-        main = [x for x in all_units if x.kind != "ui_label"]
+        main = [x for x in all_units if x.kind not in ("ui_label", "json_dialogue")]
+        json_units = [x for x in all_units if x.kind == "json_dialogue"]
         results = {}
         results.update(translator.translate_all([(u.kind, u.text) for u in main], fit, progress))
         results.update(translator.translate_all([(u.kind, u.text) for u in by_kind["mcm"]], mcm_fit, progress))
+        results.update(translator.translate_all([(u.kind, u.text) for u in json_units], mcm_fit, progress))
 
         def lookup(u: Unit):
             t = results.get((u.kind, u.text))
@@ -283,6 +301,15 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                 (out / newrel).parent.mkdir(parents=True, exist_ok=True)
                 (out / newrel).write_bytes(new)
                 rel = newrel
+            elif kind == "json":
+                text, e, bom, parsed = obj
+                new_text = jsontext.apply_units(text, parsed, changes)
+                bad = jsontext.verify(text, new_text, parsed)
+                if bad:
+                    rep.failures += [f"{rel}: {b}" for b in bad]
+                    rep.warnings.append(f"{rel}: verifica fallita, file lasciato ORIGINALE")
+                    continue
+                (out / rel).write_bytes(mcm.encode(new_text, e, bom))
             else:
                 text, e, bom = obj
                 new_text = mcm.apply_units(text, changes)

@@ -75,6 +75,7 @@ Locali e gratuiti, su ogni stringa tradotta:
 | `.esp/.esm/.esl` non localizzati | solo i sottorecord testuali in `skyrimtrans/tables.py` (nomi, descrizioni, libri, dialoghi, quest, messaggi) |
 | `*_ENGLISH.STRINGS/DLSTRINGS/ILSTRINGS` (anche dentro `.bsa`) | tutte le stringhe; crea `*_<LINGUA>.*`, il plugin non cambia |
 | `Interface/Translations/*_ENGLISH.txt` (MCM) | solo il testo dopo il tab; crea `*_<LINGUA>.txt` |
+| `*.json` con battute (es. TMSDynamicDialogue) | solo il campo `"text"` degli oggetti di una lista `"lines"` che hanno anche un `"id"`; il file mantiene lo stesso nome e viene modificato solo in quelle stringhe (spazi, rientri e ordine restano identici). Gli altri JSON (configurazioni, altri schemi) non vengono toccati. Se il JSON non è leggibile resta com'è, con un avviso |
 
 Tutto il resto (script `.pex`, mesh, texture, SKSE, ecc.) viene copiato senza modifiche.
 

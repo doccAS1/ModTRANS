@@ -54,6 +54,7 @@ KIND_HINTS = {
     "name": "short name or label of an item, spell, place, NPC or UI element; keep it concise",
     "description": "description text of an item, perk, spell or effect",
     "book_text": "in-world book text; literary register; keep the paragraph structure",
+    "json_dialogue": "line spoken by a character in a dynamic dialogue pack (a game mod); natural spoken register; similar length to the original",
     "dialogue": "line spoken by a character; natural spoken register; similar length to the original",
     "dialogue_prompt": "short dialogue choice shown to the player; concise",
     "quest_log": "quest journal entry",
