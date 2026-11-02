@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import context as ctx
+from . import lanestore
 from .gui_page import PAGE
 from .history import History
 from .pipeline import LANGS, OutputError, check_writable_dir, clean_name, run
@@ -94,22 +95,54 @@ class App:
         self.default_lane_id = ""
         self.cv = threading.Condition()
         self.stopping = False
+        saved = lanestore.load()
+        self.remember = saved is not None                # l'utente ha scelto di ricordare code e chiavi
+        for sl in saved or []:
+            lane = Lane(uuid.uuid4().hex, sl["name"], sl["s"])
+            self.lanes[lane.id] = lane
+            m = re.fullmatch(r"Coda (\d+)", sl["name"])
+            self.lane_seq = max(self.lane_seq, int(m.group(1)) if m else 0)
+
+    def persist(self) -> None:
+        """Riscrive le code salvate (se l'utente ha scelto di ricordarle). Un errore di disco non ferma il lavoro."""
+        if not self.remember:
+            return
+        with self.cv:
+            data = [{"name": l.name, "s": dict(l.s)} for l in self.lanes.values() if l.id != self.default_lane_id]
+        try:
+            lanestore.save(data)
+        except OSError:
+            pass
+
+    def set_remember(self, on: bool) -> None:
+        self.remember = on
+        if on:
+            self.persist()
+            if not lanestore.lanes_file().exists():      # nessuna coda ancora: il file vuoto segna comunque la scelta
+                lanestore.save([])
+        else:
+            try:
+                lanestore.delete()
+            except OSError:
+                pass
 
     # -- code: ognuna ha un lavoratore proprio (in parallelo alle altre); dentro una coda, una mod alla volta
-    def new_lane(self, s: dict) -> Lane:
+    def new_lane(self, s: dict, persist: bool = True) -> Lane:
         with self.cv:
             if len(self.lanes) >= MAX_LANES:
                 raise ValueError(f"Al massimo {MAX_LANES} code insieme: chiudine una che non ti serve")
             self.lane_seq += 1
             lane = Lane(uuid.uuid4().hex, f"Coda {self.lane_seq}", dict(s))
             self.lanes[lane.id] = lane
-            return lane
+        if persist:
+            self.persist()
+        return lane
 
     def default_lane(self) -> Lane:
         with self.cv:
             lane = self.lanes.get(self.default_lane_id)
         if lane is None:
-            lane = self.new_lane({})
+            lane = self.new_lane({}, persist=False)       # la coda del modo semplice non si salva: non ha impostazioni proprie
             self.default_lane_id = lane.id
         return lane
 
@@ -145,7 +178,8 @@ class App:
                 return False
             self.lanes.pop(lane.id, None)
             self.cv.notify_all()
-            return True
+        self.persist()
+        return True
 
     def _work(self, lane: Lane) -> None:
         while True:
@@ -406,8 +440,9 @@ def queue_view(app: App) -> dict:
                      "upload_id": j.upload_id, "downloadable": bool(j.out and j.out.exists())})
     paused = [l for l in lanes if l.paused]
     return {"lanes": [{"id": l.id, "name": l.name, "summary": l.summary(), "paused": l.paused, "pause_msg": l.pause_msg,
-                       "busy": bool(l.pending or l.running)} for l in lanes],
-            "jobs": jobs, "paused": bool(paused), "pause_msg": paused[0].pause_msg if paused else ""}
+                       "busy": bool(l.pending or l.running), "has_key": bool(l.s.get("api_key"))} for l in lanes],
+            "jobs": jobs, "paused": bool(paused), "pause_msg": paused[0].pause_msg if paused else "",
+            "remember": app.remember, "lanes_file": str(lanestore.lanes_file())}      # mai la chiave stessa
 
 
 def make_handler(app: App, port_holder: list):
@@ -566,10 +601,16 @@ def make_handler(app: App, port_holder: list):
                     err = check_settings(app, new, need_upload=False)
                     if err:
                         return self._json({"error": err}, 400)
+                    if not (new.get("api_key") or "").strip():
+                        new["api_key"] = lane.s.get("api_key", "")       # campo vuoto = tieni la chiave già salvata
                     with app.cv:
                         lane.s = new                             # vale per le mod in attesa e per quelle che aggiungi dopo
+                    app.persist()
                     save_settings(new)
                     return self._json({"ok": True, "summary": lane.summary()})
+                if u.path == "/api/remember":
+                    app.set_remember(bool(self._body_json().get("on")))
+                    return self._json({"remember": app.remember})
                 if u.path == "/api/lane/close":
                     lane = app.lanes.get(self._body_json().get("lane_id"))
                     if lane is None:

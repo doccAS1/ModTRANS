@@ -139,7 +139,8 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
   </div>
   <div class="field" style="margin-top:14px"><label class="check"><input type="checkbox" id="dry"><span>Solo analisi<small>Non chiama nessuna AI: mostra quante stringhe verrebbero tradotte.</small></span></label></div>
   <div class="field" id="laneBox" style="margin-top:14px"><label for="laneSel">Metti le mod in</label><select id="laneSel"><option value="new">Una nuova coda (con le impostazioni qui sopra)</option></select>
-    <p class="note" id="laneNote" style="margin:6px 0 0"></p></div>
+    <p class="note" id="laneNote" style="margin:6px 0 0"></p>
+    <label class="check" style="margin-top:10px"><input type="checkbox" id="remember"><span>Ricorda le code e le chiavi API su questo PC<small>Al prossimo avvio ritrovi le code gi&agrave; pronte, senza reinserire le chiavi. Le chiavi vengono scritte <b>in chiaro</b> in <span id="rememberFile">un file nella tua cartella utente</span>: non usarlo su un PC condiviso. Togliendo la spunta vengono cancellate.</small></span></label></div>
   <div class="actions"><button id="go" disabled>Traduci</button><button id="stop" class="sec hide">Annulla</button><span id="msg" class="err"></span></div>
 </section>
 
@@ -350,7 +351,7 @@ function jobRow(j){
 }
 function laneBox(l,jobs){
   const box=el("div","lane"+(l.paused?" paused":""));
-  const h=el("div","lh"); h.appendChild(el("b","",l.name)); h.appendChild(el("span","sum",l.summary));
+  const h=el("div","lh"); h.appendChild(el("b","",l.name)); h.appendChild(el("span","sum",l.summary+(l.has_key?" \u00b7 chiave "+(lastQ.remember?"salvata":"solo in memoria"):"")));
   if(l.paused) h.appendChild(btn("Riprendi",()=>api("/api/queue/resume",{method:"POST",body:JSON.stringify({lane_id:l.id})}).then(pollQueue).catch(()=>{}),"sm"));
   h.appendChild(btn("Usa le impostazioni qui sotto",async()=>{
     const s=currentSettings(); try{ await api("/api/lane/update",{method:"POST",body:JSON.stringify({lane_id:l.id,settings:s})}); $("#msg").textContent=""; pollQueue() }catch(e){ $("#msg").textContent=e.message } }));
@@ -368,9 +369,16 @@ function renderLaneSelect(){
   sel2.innerHTML=""; const o=el("option","","Una nuova coda (con le impostazioni qui sopra)"); o.value="new"; sel2.appendChild(o);
   for(const l of ls){ const x=el("option","",l.name+(l.summary?" — "+l.summary:"")); x.value=l.id; sel2.appendChild(x) }
   sel2.value=ls.some(l=>l.id===cur)?cur:"new";
+  if(lastQ){ $("#remember").checked=!!lastQ.remember; if(lastQ.lanes_file)$("#rememberFile").textContent=lastQ.lanes_file }
   $("#laneNote").textContent=sel2.value==="new"?(ls.length?"Una coda nuova parte subito, in parallelo alle altre.":""):"Userà le impostazioni di questa coda (servizio AI, modello, lingua): quelle qui sopra valgono solo per le code nuove. Per cambiarle usa “Usa le impostazioni qui sotto” nella coda.";
 }
 $("#laneSel").onchange=renderLaneSelect;
+$("#remember").onchange=async e=>{
+  const on=e.target.checked;
+  if(on&&!confirm("Le chiavi API delle code verranno salvate in chiaro nel file:\n"+(lastQ?lastQ.lanes_file:"")+"\n\nChiunque abbia accesso al tuo account sul PC potrebbe leggerle. Continuare?")){ e.target.checked=false; return }
+  try{ await api("/api/remember",{method:"POST",body:JSON.stringify({on})}); $("#msg").textContent="" }catch(x){ e.target.checked=!on; $("#msg").textContent=x.message }
+  pollQueue();
+};
 function renderQueue(){
   const ls=lastQ?lastQ.lanes:[];
   const jobsAll=(lastQ?lastQ.jobs:[]).filter(j=>!hiddenJobs.has(j.id));

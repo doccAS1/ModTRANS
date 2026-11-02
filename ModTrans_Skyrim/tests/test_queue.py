@@ -25,11 +25,13 @@ class FakeAI:
             self.gate.set()
         self.requests = 0
         self.models: set[str] = set()                   # modelli visti nelle richieste di traduzione
+        self.auth: set[str | None] = set()               # intestazioni Authorization viste (per controllare quale chiave arriva)
         outer = self
 
         class H(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                outer.auth.add(self.headers.get("Authorization"))
                 user = body["messages"][1]["content"]
                 try:
                     items = json.loads(user)
