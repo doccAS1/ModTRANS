@@ -63,6 +63,12 @@ def main(argv=None, backend=None) -> int:
     ap.add_argument("--game-glossary", type=Path, help="glossario ufficiale creato con 'skyrimtrans glossario' (grande: al modello va solo ciò che serve a ogni lotto)")
     ap.add_argument("--game-data", type=Path, help="cartella Data di Skyrim: costruisce il glossario ufficiale al volo (come 'glossario')")
     ap.add_argument("--fresh", action="store_true", help="ignora la memoria delle traduzioni (ritraduce tutto; i risultati la aggiornano)")
+    ap.add_argument("--json-mode", choices=["auto", "known"], default="auto",
+                    help="JSON: 'auto' (l'AI decide quali campi sono testo da tradurre) o 'known' (solo lines/text con id)")
+    ap.add_argument("--json-include", action="append", default=[], metavar="PERCORSO",
+                    help="JSON: traduci sempre questo campo (es. 'answers[].label'; accetta * e ?), si ripete")
+    ap.add_argument("--json-exclude", action="append", default=[], metavar="PERCORSO",
+                    help="JSON: non tradurre mai questo campo, si ripete")
     ap.add_argument("--review", action="store_true", help="dopo la traduzione, un secondo passaggio AI rilegge e corregge errori evidenti (più richieste)")
     ap.add_argument("--no-shorten", action="store_true", help="non accorciare i testi d'interfaccia molto più lunghi dell'originale")
     ap.add_argument("--no-memory", action="store_true", help="non legge né scrive la memoria delle traduzioni su disco")
@@ -136,7 +142,8 @@ def main(argv=None, backend=None) -> int:
         print(f"Errore: {e}", file=sys.stderr)
         return 2
     try:
-        rep = run(a.mod, out, tr, a.lang, a.source, prog, a.as_folder, a.overwrite)
+        rep = run(a.mod, out, tr, a.lang, a.source, prog, a.as_folder, a.overwrite,
+                  json_mode=a.json_mode, json_include=a.json_include, json_exclude=a.json_exclude)
     except (ValueError, AbortRun) as e:
         print(f"\nErrore: {e}", file=sys.stderr)
         return 2

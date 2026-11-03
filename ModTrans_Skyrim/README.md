@@ -75,7 +75,7 @@ Locali e gratuiti, su ogni stringa tradotta:
 | `.esp/.esm/.esl` non localizzati | solo i sottorecord testuali in `skyrimtrans/tables.py` (nomi, descrizioni, libri, dialoghi, quest, messaggi) |
 | `*_ENGLISH.STRINGS/DLSTRINGS/ILSTRINGS` (anche dentro `.bsa`) | tutte le stringhe; crea `*_<LINGUA>.*`, il plugin non cambia |
 | `Interface/Translations/*_ENGLISH.txt` (MCM) | solo il testo dopo il tab; crea `*_<LINGUA>.txt` |
-| `*.json` con battute (es. TMSDynamicDialogue) | solo il campo `"text"` degli oggetti di una lista `"lines"` che hanno anche un `"id"`; il file mantiene lo stesso nome e viene modificato solo in quelle stringhe (spazi, rientri e ordine restano identici). Gli altri JSON (configurazioni, altri schemi) non vengono toccati. Se il JSON non è leggibile resta com'è, con un avviso |
+| `*.json` | **l'AI decide quali campi sono testo** (vedi sotto); i campi `lines[].text` con `id` sono sempre tradotti. Il file mantiene nome e posizione e cambiano solo le stringhe scelte (spazi, rientri e ordine restano identici); dopo la scrittura si verifica che nient'altro sia cambiato, altrimenti il file resta originale |
 
 Tutto il resto (script `.pex`, mesh, texture, SKSE, ecc.) viene copiato senza modifiche.
 
@@ -103,6 +103,15 @@ Nell'interfaccia: campo "Nomi ufficiali del gioco" con la cartella Data. Il glos
 - Entra solo ciò che il modello non sa già. Tolgo le traduzioni ovvie: le parole comuni con una sola parola per lato (`Gold → Oro`: «gold» compare in minuscolo spesso nei testi del gioco) e i nomi composti alla lettera (`Iron Sword → Spada di Ferro`, quando ogni parola ha già la sua traduzione nel gioco). Restano i nomi particolari (`Dragonborn → Sangue di Drago`) e, nel dubbio, tutto ciò che non so classificare.
 - Entrano solo nomi (1-6 parole, iniziale maiuscola, senza tag). Restano fuori le frasi, i nomi uguali in entrambe le lingue e quelli con più traduzioni diverse nel gioco (si tiene quella usata più spesso se prevale).
 - Il glossario è grande, quindi a ogni richiesta il modello riceve **solo i termini presenti in quel lotto**. Il tuo `--glossary` resta sempre intero nel prompt e ha la precedenza.
+
+## JSON e dati delle mod: come si decide cosa tradurre
+Molte mod (framework di dialoghi, ecc.) tengono i testi dentro JSON insieme a dati che il codice della mod usa (id, tag, tipi di evento, condizioni...). Per ogni mod il programma:
+1. legge tutti i `.json` e raggruppa le stringhe per **percorso generico** (`answers[].text`, `questions[].label`...: i nomi delle sezioni cambiano da un blocco all'altro, il percorso no);
+2. scarta in locale i valori che sono chiaramente codice (`>=0`, `ddf.va.sex1.12`, percorsi di file, `snake_case`, `camelCase`, numeri);
+3. manda **una richiesta** all'AI con le istruzioni del lavoro, i percorsi, quante volte compaiono e qualche esempio; l'AI risponde quali sono testo per il giocatore (battute, risposte, domande, etichette...) e quali no. Nel dubbio deve rispondere no: tradurre per errore un codice rompe la mod, lasciare una frase in inglese no;
+4. traduce solo quei campi, sostituendoli nel testo originale e verificando che il resto sia identico.
+
+Se l'AI non risponde in modo utilizzabile (o in prova a secco) si usa un **ripiego** su nomi di campo tipici (`text`, `answer`, `question`, `label`, `title`, `description`...) con valori che sembrano frasi, e compare un avviso. L'elenco dei campi tradotti e di quelli lasciati com'erano è tra gli avvisi ("Info: campi JSON ...") e nel report. Se l'AI sbaglia un campo: da riga di comando `--json-include "answers[].label"` (traduci sempre) e `--json-exclude "questions[].mood"` (mai), ripetibili e con `*`; `--json-mode known` limita tutto a `lines[].text`. Non è ancora nell'interfaccia grafica.
 
 ## Coerenza dei termini
 I nomi (armi, oggetti, luoghi...) vengono tradotti per primi e ricordati: quando lo stesso nome compare in un testo successivo (descrizioni, libri, dialoghi, quest, MCM), la traduzione già scelta viene ripassata al modello, anche se il testo cade in un altro lotto. Il glossario dell'utente ha sempre la precedenza.
