@@ -39,6 +39,7 @@ class Report:
     shortened: int = 0     # testi d'interfaccia accorciati perché troppo lunghi
     qa_checked: int = 0    # stringhe riviste dal secondo passaggio (--review)
     qa_fixed: int = 0      # stringhe corrette dalla revisione
+    json_fields: list = field(default_factory=list)   # campi dei JSON: percorso, quanti, tradotto sì/no, chi ha deciso, esempi
 
 
 def safe_extract(zip_path: Path, dest: Path) -> None:
@@ -182,8 +183,76 @@ def _target_name(name: str, src_lang: str, tgt_lang: str) -> str:
     return re.sub(re.escape(src_lang), tgt_lang, name, flags=re.IGNORECASE)
 
 
+def _json_jobs(pending, translator, rep, mode, include, exclude):
+    """Decide quali campi dei JSON tradurre: battute note (lines/text con id) sempre; il resto lo decide l'AI
+    (mode 'auto') guardando i percorsi e qualche esempio, con ripiego su nomi di campo tipici se non risponde."""
+    import fnmatch
+    known_by_file, groups_by_file, merged = {}, {}, {}
+    for rel, text, e, bom, found, data in pending:
+        known = {p for p in found if jsontext.is_known_line(p, found) and found[p][2].strip()}
+        known_by_file[rel] = known
+        groups_by_file[rel] = jsontext.groups(found, {p for p in found if jsontext.is_known_line(p, found)})
+        for pat, g in groups_by_file[rel].items():
+            m = merged.setdefault(pat, {"count": 0, "samples": [], "files": []})
+            m["count"] += g["count"]
+            for s in g["samples"]:
+                if s not in m["samples"] and len(m["samples"]) < 5:
+                    m["samples"].append(s)
+            if rel not in m["files"] and len(m["files"]) < 3:
+                m["files"].append(rel)
+    decision: dict[str, tuple[bool, str]] = {}
+    for pat in merged:
+        if any(fnmatch.fnmatch(pat, x) for x in exclude):
+            decision[pat] = (False, "escluso da te")
+        elif any(fnmatch.fnmatch(pat, x) for x in include):
+            decision[pat] = (True, "scelto da te")
+    todo = [p for p in merged if p not in decision]
+    if todo and mode == "auto":
+        asked = translator.classify_fields([
+            {"id": i, "path": pat, "occurrences": merged[pat]["count"], "files": merged[pat]["files"],
+             "samples": merged[pat]["samples"]} for i, pat in enumerate(todo)])
+        if not asked:
+            rep.warnings.append("JSON: l'AI non ha classificato i campi: uso un ripiego sui nomi di campo tipici "
+                                "(text, answer, question, label...). Controlla l'elenco dei campi tradotti.")
+        for i, pat in enumerate(todo):
+            if i in asked:
+                decision[pat] = (asked[i], "AI")
+            else:
+                decision[pat] = (jsontext.looks_like_text(pat, merged[pat]["samples"]), "ripiego")
+    for pat in todo:
+        decision.setdefault(pat, (False, "non analizzato"))
+    jobs, units = [], []
+    for rel, text, e, bom, found, data in pending:
+        paths = sorted(known_by_file[rel])
+        for pat, g in groups_by_file[rel].items():
+            if decision[pat][0]:
+                paths += g["paths"]
+        parsed = (found, sorted(set(paths), key=lambda p: found[p][0]))
+        u = jsontext.extract_units(parsed, rel)
+        if u:
+            jobs.append(("json", rel, (text, e, bom, parsed), data))
+            units += u
+    nknown = sum(len(v) for v in known_by_file.values())
+    if nknown:
+        rep.json_fields.append({"path": "lines[].text (con id)", "count": nknown, "translate": True, "by": "schema noto",
+                                "samples": []})
+    for pat, m in merged.items():
+        rep.json_fields.append({"path": pat, "count": m["count"], "translate": decision[pat][0], "by": decision[pat][1],
+                                "samples": m["samples"][:3]})
+    yes = [f"{f['path']} ({f['count']})" for f in rep.json_fields if f["translate"]]
+    no = [f"{f['path']} ({f['count']})" for f in rep.json_fields if not f["translate"]]
+    if yes or no:
+        cut = lambda L: ", ".join(L[:12]) + (f" … (+{len(L) - 12})" if len(L) > 12 else "")
+        if yes:
+            rep.warnings.append("Info: campi JSON tradotti: " + cut(yes))
+        if no:
+            rep.warnings.append("Info: campi JSON lasciati com'erano (dati della mod): " + cut(no))
+    return jobs, units
+
+
 def run(src: Path, dest: Path, translator: Translator, target: str,
-        source: str = "english", progress=None, as_folder: bool = False, overwrite: bool = False) -> Report:
+        source: str = "english", progress=None, as_folder: bool = False, overwrite: bool = False,
+        json_mode: str = "auto", json_include=(), json_exclude=()) -> Report:
     tgt_name, enc = LANGS[target.lower()]
     src_name, _ = LANGS[source.lower()]
     rep = Report()
@@ -204,6 +273,7 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
 
         jobs = []  # (kind di file, relpath, oggetto, byte originali)
         all_units: list[Unit] = []
+        json_pending = []
         for rel, data, origin in sources:
             ext = Path(rel).suffix.lower()
             name = Path(rel).name
@@ -219,19 +289,17 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                     u, w = sf.extract_units(obj, enc, rel, ext[1:])
                     jobs.append(("strings", rel, obj, data))
                 elif ext == ".json":
-                    if len(data) > 30_000_000 or (b'"lines"' not in data and b'"text"' not in data):
+                    if len(data) > 30_000_000:
                         continue
                     text, e, bom = mcm.decode(data)
                     try:
-                        parsed = jsontext.parse(text)
+                        found = jsontext.scan(text)
                     except (jsontext.JsonError, ValueError, IndexError) as ex:
-                        if '"lines"' in text:
+                        if '"lines"' in text or '"text"' in text:
                             rep.warnings.append(f"{rel}: JSON non analizzabile, copiato senza modifiche ({ex})")
                         continue
-                    u, w = jsontext.extract_units(parsed, rel), []
-                    if not u:
-                        continue
-                    jobs.append(("json", rel, (text, e, bom, parsed), data))
+                    json_pending.append((rel, text, e, bom, found, data))
+                    continue
                 else:
                     text, e, bom = mcm.decode(data)
                     u, w = mcm.extract_units(text, rel), []
@@ -243,6 +311,14 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                 rep.warnings.append(f"Info: {rel} letto dall'archivio {origin}")
             rep.warnings += w
             all_units += u
+
+        if json_pending:
+            if not translator.brief:
+                translator.set_brief(offline_facts(
+                    [plugin_info(obj, rel, enc) for k, rel, obj, _ in jobs if k == "plugin"]))
+            jj, ju = _json_jobs(json_pending, translator, rep, json_mode, tuple(json_include), tuple(json_exclude))
+            jobs += jj
+            all_units += ju
 
         kinds = {k for k, *_ in jobs}
         localized = [rel for k, rel, obj, _ in jobs if k == "plugin" and obj.localized]

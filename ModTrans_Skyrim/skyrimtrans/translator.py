@@ -175,6 +175,23 @@ REVIEW_SYSTEM = (
     "{{\"id\": <number>, \"ok\": false, \"fix\": \"<the corrected translation, with the same markers>\"}}.{glossary}")
 
 
+CLASSIFY_SYSTEM = (
+    "You help translate a Skyrim mod into {lang}. The mod ships data files (JSON) that mix text the player reads "
+    "or hears with data the mod's code relies on. You get groups of fields: for each, a field path pattern "
+    "('lines[].text' means the 'text' field of every item of a list called 'lines'), how many times it occurs, "
+    "the file it comes from and a few sample values.\n"
+    "Decide for each group whether its values are TEXT SHOWN OR SPOKEN TO THE PLAYER IN THE GAME and must be "
+    "translated: dialogue lines, player answers or choices, questions, menu or UI labels, item or quest names and "
+    "descriptions, notifications, tooltips, book text. Do NOT translate anything the mod uses internally: ids, "
+    "keys, names of types, events, actions, animations, tags, categories, conditions or operators, file paths, "
+    "form ids, script or function names, setting values, language codes. A value that looks like a readable "
+    "word may still be a code compared by the mod (for example a speaker role, a mood or a tag): if you are not "
+    "reasonably sure it is meant to be read by the player, answer false. Wrongly translating a code breaks the "
+    "mod; leaving a sentence in English only costs some polish.\n"
+    "Reply ONLY with a JSON array with one object per group: {{\"id\": <number>, \"translate\": true or false, "
+    "\"why\": \"<a few words>\"}}.")
+
+
 # ------------------------------------------------------------------ memoria su disco
 def memory_dir() -> Path:
     return Path(os.environ.get("SKYRIMTRANS_HOME") or (Path.home() / ".skyrimtrans")) / "memory"
@@ -413,6 +430,20 @@ class Translator:
                 break
         self.warnings.append(f"{what} saltata per {len(items)} stringhe (restano com'erano): {why}")
         return None
+
+    def classify_fields(self, items: list[dict]) -> dict[int, bool]:
+        """Chiede al modello quali gruppi di campi (di file JSON) sono testo da tradurre. {id: sì/no}; mancano quelli senza risposta."""
+        out: dict[int, bool] = {}
+        for i in range(0, len(items), 40):
+            got = self._aux_call(self._aux_system(CLASSIFY_SYSTEM), items[i:i + 40], what="analisi dei campi JSON")
+            for o in got or []:
+                try:
+                    n, v = int(o["id"]), o.get("translate")
+                except (KeyError, ValueError, TypeError):
+                    continue
+                if isinstance(v, bool):
+                    out[n] = v
+        return out
 
     def _apply_fix(self, k, todo, new, fit) -> str | None:
         """Convalida un testo proposto in una rifinitura e lo sostituisce a quello attuale. Ritorna il motivo se scartato."""
