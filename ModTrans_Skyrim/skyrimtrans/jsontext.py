@@ -8,6 +8,7 @@ resta com'è. Il file non viene riscritto da zero: si sostituiscono soltanto le 
 from __future__ import annotations
 
 import json
+import re
 
 from .common import Unit
 
@@ -171,3 +172,65 @@ def verify(orig: str, new: str, parsed) -> list[str]:
 
     walk(a, b, ())
     return problems
+
+
+# ---------------------------------------------------------------- campi sconosciuti: raggruppati per percorso
+scan = _scan
+is_known_line = _is_line_text
+# nomi di campo che di solito contengono testo per il giocatore (solo per il ripiego senza AI)
+TEXT_KEYS = {"text", "answer", "answers", "question", "questions", "label", "title", "description", "prompt",
+             "message", "content", "caption", "tooltip", "hint", "option", "response", "reply", "line",
+             "dialogue", "subtitle", "displayname"}
+
+
+def pattern(path: tuple, collapse: bool = False) -> str:
+    """Percorso 'generico': 'Sezione.lines.0.text' -> 'lines[].text' (le sezioni cambiano nome da un blocco all'altro)."""
+    named = [(i, k) for i, k in enumerate(path) if not isinstance(k, int)]
+    if not named:
+        return "[]"
+    i, last = named[-1]
+    if i < len(path) - 1:                       # elenco di stringhe: 'actions[]'
+        return last + "[]"
+    if collapse or len(named) == 1:
+        return last
+    j, prev = named[-2]
+    return f"{prev}[].{last}" if i > 0 and isinstance(path[i - 1], int) else f"{prev}.{last}"
+
+
+def value_ok(v: str) -> bool:
+    """Falso per i valori che chiaramente non sono testo da leggere (id, percorsi, condizioni, numeri...)."""
+    s = v.strip()
+    if not re.search(r"[A-Za-z\u00c0-\u024f]", s):
+        return False
+    if re.fullmatch(r"[<>=!]+\s*-?[\d.]+", s) or re.fullmatch(r"[0-9a-fA-F-]{8,}", s):
+        return False
+    if " " not in s:
+        if re.search(r"[\\/]", s) or re.search(r"[a-z][A-Z]", s):
+            return False
+        if re.fullmatch(r"[\w.\-:]+", s) and any(c in s for c in "_.:-") and not s.endswith((".", "!", "?")):
+            return False
+    return True
+
+
+def groups(found: dict, known: set) -> dict:
+    """{pattern: {"count", "samples", "paths"}} per le stringhe non già note e che sembrano testo."""
+    cand = {p: f for p, f in found.items() if p not in known and value_ok(f[2])}
+    out: dict = {}
+    for collapse in (False, True):
+        out = {}
+        for p, f in cand.items():
+            g = out.setdefault(pattern(p, collapse), {"count": 0, "samples": [], "paths": []})
+            g["count"] += 1
+            g["paths"].append(p)
+            if f[2] not in g["samples"] and len(g["samples"]) < 5:
+                g["samples"].append(f[2][:120])
+        if len(out) <= 60:
+            break
+    return out
+
+
+def looks_like_text(pat: str, samples: list[str]) -> bool:
+    """Ripiego senza AI: campo con nome tipico di un testo e valori che sembrano frasi."""
+    key = pat.rsplit(".", 1)[-1].replace("[]", "").lower()
+    sentences = sum(1 for s in samples if " " in s.strip())
+    return key in TEXT_KEYS and bool(samples) and sentences * 2 >= len(samples)
