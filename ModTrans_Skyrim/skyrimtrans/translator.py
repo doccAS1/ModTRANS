@@ -144,15 +144,57 @@ class OpenAICompatBackend:
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
 
 
+_OBJ_ID_TEXT = re.compile(r'\{\s*"id"\s*:\s*(\d+)\s*,\s*"text"\s*:\s*"(.*?)"\s*\}', re.DOTALL)
+
+
+def _salvage(reply: str) -> list[dict]:
+    """Recupera gli oggetti {"id": ...} leggibili da una risposta rovinata (tagliata a metà, con un oggetto rotto).
+    Quelli non recuperati risultano mancanti e vengono richiesti di nuovo."""
+    dec, out, pos = json.JSONDecoder(), [], 0
+    while True:
+        pos = reply.find("{", pos)
+        if pos < 0:
+            break
+        try:
+            obj, end = dec.raw_decode(reply, pos)
+        except ValueError:
+            pos += 1
+            continue
+        if isinstance(obj, dict) and "id" in obj:
+            out.append(obj)
+            pos = end
+        else:
+            pos += 1
+    have = {str(o["id"]) for o in out}
+    for m in _OBJ_ID_TEXT.finditer(reply):          # virgolette non protette dentro il testo: ultima risorsa
+        if m.group(1) not in have:
+            raw = m.group(2)
+            try:
+                text = json.loads('"' + raw + '"')
+            except ValueError:
+                text = raw.replace('\\"', '"').replace("\\n", "\n")
+            out.append({"id": int(m.group(1)), "text": text})
+    return out
+
+
 def _parse_list(reply: str) -> list[dict]:
     m = re.search(r"\[.*\]", reply, re.DOTALL)
     if not m:
+        out = _salvage(reply)                       # niente elenco (o tagliato prima della ']'): si salva il salvabile
+        if out:
+            return out
         raise ValueError("risposta senza JSON")
-    return json.loads(m.group(0))
+    try:
+        return json.loads(m.group(0))
+    except ValueError as e:
+        out = _salvage(reply)
+        if out:
+            return out
+        raise e
 
 
 def _parse_reply(reply: str) -> dict[int, str]:
-    return {int(o["id"]): o["text"] for o in _parse_list(reply)}
+    return {int(o["id"]): o["text"] for o in _parse_list(reply) if isinstance(o, dict) and "text" in o}
 
 
 SHORTEN_SYSTEM = (
@@ -572,10 +614,21 @@ class Translator:
                 except ProtectionError as e:
                     reasons[k] = str(e)
                     still.append(k)
+            round_ok = len(pending) - len(still)
             pending = still
             if pending:
-                prot_round += 1
+                prot_round = 0 if round_ok else prot_round + 1      # chi fa progressi non esaurisce i tentativi
                 self.stats["retries"] += 1
+                structural = all(reasons.get(k, "").startswith(("risposta non valida", "traduzione mancante")) for k in pending)
+                if structural and not round_ok and len(pending) > 1:
+                    # il modello non regge un lotto così grande (o ha risposto fuori formato): lo si divide a metà
+                    # e ogni metà riparte da zero, invece di rifare la stessa richiesta che fallirebbe uguale
+                    half = (len(pending) + 1) // 2
+                    self.stats["splits"] = self.stats.get("splits", 0) + 1
+                    split, pending = (pending[:half], pending[half:]), []
+                    for part in split:
+                        self._run_batch(part, todo, fit)
+                    return
                 if prot_round > self.retries:
                     break
         for k in pending:                                  # rimasti falliti: l'originale resta intatto
