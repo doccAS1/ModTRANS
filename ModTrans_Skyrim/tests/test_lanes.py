@@ -203,3 +203,41 @@ def test_output_and_memory_writes_are_serialized_between_lanes(tmp_path):
         assert done.wait(5)                                            # appena il blocco si libera, procede
         t.join()
     assert (tmp_path / "r.zip").exists() and TranslationStore(tmp_path / "m.jsonl").load() == {("name", "Iron Sword"): "Spada"}
+
+
+def test_changing_only_the_model_keeps_api_and_key(monkeypatch, tmp_path):
+    """'Modifica' di una coda: si cambia il modello e il resto (indirizzo, chiave, lingua) resta com'era."""
+    ai = FakeAI(gated=True)
+    httpd, app, c = start_server(monkeypatch, tmp_path)
+    first = start(c, upload(c, "A.esp"), ai, model="vecchio", api_key="LA-MIA-CHIAVE")
+    until(lambda: lanes(c)["Coda 1"]["busy"], "occupata")
+    second = start(c, upload(c, "B.esp"), ai, lane=first["lane_id"])      # in attesa dietro la prima
+    lane = lanes(c)["Coda 1"]
+    assert lane["settings"]["model"] == "vecchio" and lane["settings"]["lang"] == "italian"
+    assert "api_key" not in lane["settings"] and lane["has_key"]
+    r = c.call("/api/lane/update", {"lane_id": first["lane_id"], "patch": {"model": "nuovo"}})
+    assert r[0] == 200 and "nuovo" in json.loads(r[1])["summary"]
+    ai.gate.set()
+    assert wait(c, second["job_id"])["state"] == "done"
+    assert ai.models == {"vecchio", "nuovo"}                               # la prima col vecchio, la seconda col nuovo
+    assert ai.auth == {"Bearer LA-MIA-CHIAVE"}                              # stessa chiave, mai reinserita
+    s = lanes(c)["Coda 1"]["settings"]
+    assert s["base_url"] == ai.url and s["lang"] == "italian" and s["model"] == "nuovo"
+    stop(httpd, ai)
+
+
+def test_patch_can_replace_key_and_ignores_unknown_fields(monkeypatch, tmp_path):
+    ai = FakeAI()
+    httpd, app, c = start_server(monkeypatch, tmp_path)
+    first = start(c, upload(c, "A.esp"), ai, api_key="UNO")
+    assert wait(c, first["job_id"])["state"] == "done"
+    c.call("/api/lane/update", {"lane_id": first["lane_id"], "patch": {"api_key": "DUE", "model": "m2",
+                                                                      "out_dir": "/etc", "upload_id": "x"}})
+    lane = app.lanes[first["lane_id"]]
+    assert lane.s["api_key"] == "DUE" and lane.s["model"] == "m2"
+    assert lane.s.get("out_dir") in (None, "") and "upload_id" not in lane.s     # solo i campi modificabili
+    c.call("/api/lane/update", {"lane_id": first["lane_id"], "patch": {"api_key": "  ", "model": "m3"}})
+    assert lane.s["api_key"] == "DUE" and lane.s["model"] == "m3"                # chiave vuota = resta
+    bad = c.call("/api/lane/update", {"lane_id": first["lane_id"], "patch": {"lang": "english"}})
+    assert bad[0] == 400 and lane.s["lang"] == "italian"                          # stessa lingua dell'originale
+    stop(httpd, ai)
