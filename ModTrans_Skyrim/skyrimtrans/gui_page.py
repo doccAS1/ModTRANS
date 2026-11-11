@@ -59,6 +59,8 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
 .lane .lh{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 .lane .lh b{font-size:14px}.lane .lh .sum{font-size:12px;color:var(--mute);flex:1;min-width:120px}
 .lane .pm{font-size:13px;color:var(--warn);margin:0 0 8px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+.modal .card{max-width:520px;width:100%;margin:0;max-height:90vh;overflow:auto}
 .lane .empty{font-size:13px;color:var(--mute);margin:0 0 4px}
 .stage h3{font-size:12px;margin:0 0 6px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .hist .meta{font-size:12px;color:var(--mute)}
@@ -174,6 +176,23 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
     <div style="display:flex;gap:8px;align-items:center"><button class="sec" id="bNew" type="button">Nuova cartella</button><span id="bErr" class="err" style="flex:1;font-size:13px"></span><button class="sec" id="bCancel" type="button">Annulla</button><button id="bOk" type="button">Usa questa cartella</button></div>
   </div>
 </div>
+<div id="laneEdit" class="modal hide"><div class="card">
+  <h2 id="leTitle">Modifica la coda</h2>
+  <div class="field"><label for="le_preset">Servizio AI</label><select id="le_preset"></select></div>
+  <div class="row">
+    <div class="field"><label for="le_model">Modello</label><input type="text" id="le_model" autocomplete="off"></div>
+    <div class="field" id="le_urlBox"><label for="le_url">Indirizzo API</label><input type="text" id="le_url" autocomplete="off"></div>
+  </div>
+  <div class="field"><label for="le_key">Chiave API</label><input type="password" id="le_key" autocomplete="off" placeholder="lascia vuoto per tenere quella attuale"><small class="hint" id="le_keyNote"></small></div>
+  <div class="row">
+    <div class="field"><label for="le_lang">Traduci in</label><select id="le_lang"></select></div>
+    <div class="field"><label for="le_source">Lingua originale</label><select id="le_source"></select></div>
+  </div>
+  <div class="field"><label for="le_batch">Stringhe per richiesta</label><input type="number" id="le_batch" min="1" max="200"></div>
+  <p class="note">Vale per le mod in attesa e per quelle che aggiungi dopo. La mod in corso finisce con le impostazioni di prima.</p>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><span id="leErr" class="err" style="flex:1"></span>
+    <button class="sec" id="leCancel" type="button">Annulla</button><button id="leSave" type="button">Salva</button></div>
+</div></div>
 <script>
 const T="__TOKEN__", D=__DEFAULTS__;
 const $=s=>document.querySelector(s);
@@ -353,6 +372,7 @@ function laneBox(l,jobs){
   const box=el("div","lane"+(l.paused?" paused":""));
   const h=el("div","lh"); h.appendChild(el("b","",l.name)); h.appendChild(el("span","sum",l.summary+(l.has_key?" \u00b7 chiave "+(lastQ.remember?"salvata":"solo in memoria"):"")));
   if(l.paused) h.appendChild(btn("Riprendi",()=>api("/api/queue/resume",{method:"POST",body:JSON.stringify({lane_id:l.id})}).then(pollQueue).catch(()=>{}),"sm"));
+  h.appendChild(btn("Modifica",()=>openLaneEdit(l),"sm"));
   h.appendChild(btn("Usa le impostazioni qui sotto",async()=>{
     const s=currentSettings(); try{ await api("/api/lane/update",{method:"POST",body:JSON.stringify({lane_id:l.id,settings:s})}); $("#msg").textContent=""; pollQueue() }catch(e){ $("#msg").textContent=e.message } }));
   if(jobs.some(j=>j.state==="queued")) h.appendChild(btn("Annulla le in attesa",()=>api("/api/queue/clear",{method:"POST",body:JSON.stringify({lane_id:l.id})}).then(pollQueue).catch(()=>{})));
@@ -363,6 +383,28 @@ function laneBox(l,jobs){
   if(!jobs.length) box.appendChild(el("p","empty","Nessuna mod in questa coda."));
   box.appendChild(ul); return box;
 }
+let editingLane=null;
+for(const [k,l] of D.langs){for(const id of ["le_lang","le_source"]){const o=document.createElement("option");o.value=k;o.textContent=l;$("#"+id).appendChild(o)}}
+for(const o of document.querySelectorAll("#preset option")){ $("#le_preset").appendChild(o.cloneNode(true)) }
+function leUrlBox(){ $("#le_urlBox").classList.toggle("hide",PRESETS[$("#le_preset").value].provider==="anthropic") }
+$("#le_preset").onchange=()=>{ const p=PRESETS[$("#le_preset").value]; $("#le_url").value=p.url; $("#le_model").value=p.model; $("#le_batch").value=p.batch; leUrlBox();
+  $("#le_keyNote").textContent=editingLane&&$("#le_preset").value!==editingLane.settings.preset?"Hai cambiato servizio: serve la chiave di quel servizio.":"" };
+function openLaneEdit(l){
+  editingLane=l; const s=l.settings||{};
+  $("#leTitle").textContent="Modifica "+l.name; $("#leErr").textContent=""; $("#le_key").value=""; $("#le_keyNote").textContent=l.has_key?"Una chiave è già impostata per questa coda.":"";
+  $("#le_preset").value=PRESETS[s.preset]?s.preset:"custom"; $("#le_model").value=s.model||""; $("#le_url").value=s.base_url||"";
+  $("#le_lang").value=s.lang||"italian"; $("#le_source").value=s.source||"english"; $("#le_batch").value=s.batch_items||40; leUrlBox();
+  $("#laneEdit").classList.remove("hide"); $("#le_model").focus();
+}
+$("#leCancel").onclick=()=>{ editingLane=null; $("#laneEdit").classList.add("hide") };
+$("#laneEdit").onclick=e=>{ if(e.target.id==="laneEdit")$("#leCancel").click() };
+$("#leSave").onclick=async()=>{
+  if(!editingLane)return; const preset=$("#le_preset").value, p=PRESETS[preset];
+  const patch={preset,provider:p.provider,model:$("#le_model").value.trim(),base_url:$("#le_url").value.trim(),
+    lang:$("#le_lang").value,source:$("#le_source").value,batch_items:parseInt($("#le_batch").value)||40,api_key:$("#le_key").value.trim()};
+  try{ await api("/api/lane/update",{method:"POST",body:JSON.stringify({lane_id:editingLane.id,patch})}); editingLane=null; $("#laneEdit").classList.add("hide"); pollQueue() }
+  catch(e){ $("#leErr").textContent=e.message }
+};
 function renderLaneSelect(){
   const sel2=$("#laneSel"), cur=sel2.dataset.want||sel2.value; delete sel2.dataset.want;
   const ls=lastQ?lastQ.lanes:[];
