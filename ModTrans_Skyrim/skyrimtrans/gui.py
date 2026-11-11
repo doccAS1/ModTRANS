@@ -31,6 +31,8 @@ SETTINGS_FILE = Path.home() / ".skyrimtrans.json"
 SAVE_KEYS = ("lang", "source", "preset", "model", "base_url", "batch_items", "nexus_game",
              "out_where", "out_dir", "out_mode", "use_memory", "shorten", "review", "game_data")  # mai la chiave API
 ALLOWED_EXT = {".zip", ".7z", ".esp", ".esm", ".esl"}
+LANE_EDITABLE = ("preset", "provider", "model", "base_url", "lang", "source", "batch_items", "shorten", "review",
+                 "use_memory")                    # cosa si può cambiare di una coda senza toccare il resto (la chiave a parte)
 OWN_KEYS = ("upload_id", "brief", "dry_run")      # impostazioni della singola mod; tutto il resto è della coda
 MAX_LANES = 6
 PRESET_LABELS = {"claude": "Claude", "openai": "OpenAI", "ollama": "Ollama", "lmstudio": "LM Studio",
@@ -440,7 +442,8 @@ def queue_view(app: App) -> dict:
                      "upload_id": j.upload_id, "downloadable": bool(j.out and j.out.exists())})
     paused = [l for l in lanes if l.paused]
     return {"lanes": [{"id": l.id, "name": l.name, "summary": l.summary(), "paused": l.paused, "pause_msg": l.pause_msg,
-                       "busy": bool(l.pending or l.running), "has_key": bool(l.s.get("api_key"))} for l in lanes],
+                       "busy": bool(l.pending or l.running), "has_key": bool(l.s.get("api_key")),
+                       "settings": {k: l.s[k] for k in LANE_EDITABLE if k in l.s}} for l in lanes],
             "jobs": jobs, "paused": bool(paused), "pause_msg": paused[0].pause_msg if paused else "",
             "remember": app.remember, "lanes_file": str(lanestore.lanes_file())}      # mai la chiave stessa
 
@@ -597,12 +600,18 @@ def make_handler(app: App, port_holder: list):
                     lane = app.lanes.get(b.get("lane_id"))
                     if lane is None:
                         return self._json({"error": "Questa coda non esiste più"}, 404)
-                    new = {k: v for k, v in (b.get("settings") or {}).items() if k not in OWN_KEYS}
+                    if isinstance(b.get("patch"), dict):                    # cambia solo questi campi, il resto resta
+                        patch = {k: v for k, v in b["patch"].items() if k in LANE_EDITABLE}
+                        if (b["patch"].get("api_key") or "").strip():
+                            patch["api_key"] = b["patch"]["api_key"].strip()   # chiave vuota = resta quella attuale
+                        new = {**lane.s, **patch}
+                    else:
+                        new = {k: v for k, v in (b.get("settings") or {}).items() if k not in OWN_KEYS}
+                        if not (new.get("api_key") or "").strip():
+                            new["api_key"] = lane.s.get("api_key", "")       # campo vuoto = tieni la chiave già salvata
                     err = check_settings(app, new, need_upload=False)
                     if err:
                         return self._json({"error": err}, 400)
-                    if not (new.get("api_key") or "").strip():
-                        new["api_key"] = lane.s.get("api_key", "")       # campo vuoto = tieni la chiave già salvata
                     with app.cv:
                         lane.s = new                             # vale per le mod in attesa e per quelle che aggiungi dopo
                     app.persist()
