@@ -67,6 +67,7 @@ Locali e gratuiti, su ogni stringa tradotta:
 - **numeri cambiati** (nomi, descrizioni, pulsanti, messaggi, obiettivi) e **premesse del modello** ("Ecco la traduzione...", virgolette aggiunte, blocchi di codice): la stringa viene richiesta di nuovo; se il difetto resta, rimane l'originale e compare nel report;
 - **stringa identica all'originale** (di più parole): avviso, non viene scartata;
 - **testi d'interfaccia troppo lunghi** (nomi, pulsanti, scelte di dialogo, obiettivi, voci MCM): un passaggio in più li fa riscrivere più brevi (attivo di default; `--no-shorten` o casella "Accorcia" per spegnerlo); se restano lunghi c'è un avviso.
+- **Risposte rovinate del modello** (fuori formato, tagliate a metà, con virgolette non protette, stringhe saltate): il programma recupera quello che si può leggere e richiede solo il resto; se un lotto fallisce del tutto lo **divide a metà** e riprova ogni metà (40 → 20 → 10 ...), invece di ripetere la stessa richiesta. Con un modello che non risponde mai in formato valido l'esecuzione si ferma lo stesso presto, con le traduzioni già fatte al sicuro in memoria. Se capita spesso, un modello più capace o meno stringhe per richiesta restano la soluzione migliore.
 - **Revisione finale con l'AI** (facoltativa, `--review` o casella): un secondo passaggio rilegge le traduzioni nuove e propone correzioni solo per errori evidenti. Le correzioni passano gli stessi controlli dei segnaposto; quelle non valide vengono scartate. Costa circa una richiesta in più ogni 30 stringhe.
 
 ## Cosa traduce
