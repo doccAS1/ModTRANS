@@ -23,7 +23,7 @@ from . import context as ctx
 from . import lanestore
 from .gui_page import PAGE
 from .history import History
-from .pipeline import LANGS, OutputError, check_writable_dir, clean_name, run
+from .pipeline import LANGS, OutputError, Project, check_writable_dir, clean_name, run, write_output
 from .translator import (DEFAULT_MODEL, AbortRun, AnthropicBackend, OpenAICompatBackend, Translator,
                          clear_memory, memory_info, store_for)
 
@@ -57,8 +57,10 @@ class Job:
         self.done = self.total = 0
         self.log: list[str] = []
         self.report = self.error = self.out = self.saved_to = None
+        self.project: Project | None = None   # la mod aperta: le sue righe si vedono e si correggono nell'editor
         self.name, self.lang = name, lang
         self.cancel = threading.Event()
+        self.finished_at = 0.0
 
 
 class Lane:
@@ -88,6 +90,8 @@ class App:
         self.jobs: dict[str, Job] = {}
         self.outputs: set[str] = set()   # percorsi prodotti da noi: gli unici che "Apri cartella" può aprire
         self.history = History()
+        self.projects: dict[str, Project] = {}            # mod aperte nell'editor prima della traduzione ("u:<upload>")
+        self.proj_tasks: dict[str, dict] = {}             # traduzione di singole righe in corso, per mod
         for e in self.history.list():
             if e.get("saved_to"):
                 self.outputs.add(str(Path(e["saved_to"]).resolve()))
@@ -199,6 +203,8 @@ class App:
                 run_job(self, job, job.s)
             finally:
                 lane.running = None
+            job.finished_at = time.time()
+            self.keep_project(job)
             if job.state == "done" and not job.dry:
                 self._record(job)
                 if not (job.report or {}).get("failures"):
@@ -220,6 +226,40 @@ class App:
                 job.out = new                            # lo zip ora vive nella cronologia
         except OSError as e:
             job.log.append(f"Non sono riuscito a salvare la mod nella cronologia: {e}")
+
+    # -- editor delle stringhe
+    MAX_PROJECTS = 3        # mod tenute aperte (ognuna occupa lo spazio della mod estratta)
+
+    def project_for(self, key: str) -> Project | None:
+        if key in self.projects:
+            return self.projects[key]
+        job = self.jobs.get(key)
+        return job.project if job else None
+
+    def open_project(self, upload_id: str, lang: str, source: str) -> str:
+        key = "u:" + upload_id
+        cur = self.projects.get(key)
+        if cur and (cur.target, cur.source) == (lang.lower(), source.lower()):
+            return key
+        if cur:
+            cur.close()
+            self.projects.pop(key, None)
+        path, _ = self.uploads[upload_id]
+        self.projects[key] = Project(path, lang, source)
+        while len(self.projects) > self.MAX_PROJECTS:         # la più vecchia si chiude
+            old = next(iter(self.projects))
+            self.projects.pop(old).close()
+        return key
+
+    def keep_project(self, job: Job) -> None:
+        """Tiene aperte le mod degli ultimi lavori (per correggerle); le più vecchie si chiudono."""
+        with self.cv:
+            holders = [j for j in self.jobs.values() if j.project is not None]
+            holders.sort(key=lambda j: j.finished_at)
+            for j in holders[:-self.MAX_PROJECTS]:
+                if j.state not in ("queued", "running"):
+                    pr, j.project = j.project, None
+                    pr.close()
 
     def close(self):
         with self.cv:
@@ -377,7 +417,17 @@ def run_job(app: App, job: Job, s: dict) -> None:
 
         job.phase = "Analisi e traduzione"
         job.log.append("Analisi del file e traduzione...")
-        rep = run(src, dest, tr, s["lang"], s["source"], prog, as_folder=as_folder)
+        proj = app.projects.pop("u:" + s["upload_id"], None)      # già aperta nell'editor (con eventuali correzioni a mano)?
+        if proj is not None and (proj.target, proj.source) != (s["lang"].lower(), s["source"].lower()):
+            proj.close()
+            proj = None
+        if proj is not None:
+            proj.classify(tr)
+        else:
+            proj = Project(src, s["lang"], s["source"], translator=tr)
+        job.project = proj
+        proj.translate(tr, prog)
+        rep = proj.build(dest, as_folder)
         job.report = {"translated": rep.translated, "kept_original": rep.kept_original,
                       "files": rep.files, "warnings": rep.warnings, "failures": rep.failures,
                       "from_memory": rep.from_memory, "requests": rep.requests,
@@ -399,6 +449,55 @@ def run_job(app: App, job: Job, s: dict) -> None:
     except Exception as e:  # noqa: BLE001 - qualunque errore va mostrato all'utente
         job.state, job.phase, job.error = "error", "Errore", f"{e}"
         job.log.append(f"Errore: {e}")
+
+
+def editor_translate(app: App, key: str, proj: Project, rows: list[int], s: dict) -> None:
+    """Traduce con l'AI solo le righe indicate (una, alcune o tutte quelle filtrate). Gira in un thread."""
+    task = app.proj_tasks[key]
+    try:
+        glossary = None
+        if (s.get("glossary") or "").strip():
+            glossary = json.loads(s["glossary"])
+            assert isinstance(glossary, dict)
+        game_gl = None
+        if (s.get("game_data") or "").strip():
+            from .glossary import build_glossary
+            game_gl, _ = build_glossary(Path(s["game_data"].strip()), proj.source, proj.target,
+                                        LANGS[proj.source][1], LANGS[proj.target][1])
+        backend = make_backend(s)
+        task["phase"] = "Verifico la connessione"
+        try:
+            backend("Reply with the single word OK.", "ping")      # fallisce subito se chiave/server sono sbagliati
+        except Exception as e:  # noqa: BLE001
+            hint = ("Controlla che il server sia acceso e l'indirizzo giusto." if s["provider"] == "openai"
+                    else "Controlla la chiave API.")
+            raise RuntimeError(f"Connessione al servizio AI non riuscita. {hint} Dettaglio: {e}") from None
+        store = store_for(proj.target, f"{s['provider']}-{s.get('model') or DEFAULT_MODEL}",
+                          {**(game_gl or {}), **(glossary or {})} or None)
+        tr = Translator(backend, proj.target.capitalize(), glossary, batch_items=max(1, int(s.get("batch_items") or 40)),
+                        store=store, reuse_memory=False,        # chi chiede di tradurre una riga vuole una risposta nuova
+                        shorten=s.get("shorten", True), review=False, game_glossary=game_gl)
+
+        def heartbeat():
+            if task["cancel"].is_set():
+                raise Cancelled()
+
+        tr.heartbeat = heartbeat
+        tr.on_wait = lambda sec, why: task.update(phase=f"Attendo il servizio AI ({int(sec)} s)")
+        task["phase"] = "Traduco"
+        proj.translate(tr, lambda d, n: (heartbeat(), task.update(done=d, total=n)), only=set(rows))
+        task["state"] = "done"
+    except Cancelled:
+        task["state"] = "cancelled"
+    except Exception as e:  # noqa: BLE001 - qualunque errore va mostrato all'utente
+        task["state"], task["error"] = "error", str(e)
+    finally:
+        proj.live = None
+
+
+def task_view(app: App, key: str) -> dict:
+    t = app.proj_tasks.get(key)
+    return {k: v for k, v in t.items() if k != "cancel"} if t else {"state": "idle"}
 
 
 ID_OK = re.compile(r"[0-9a-f]{32}")
@@ -515,6 +614,25 @@ def make_handler(app: App, port_holder: list):
                 return self._json(memory_info())
             if u.path == "/api/browse":
                 return self._json(browse((q.get("path") or [""])[0]))
+            if u.path == "/api/proj/page":
+                key = (q.get("key") or [""])[0]
+                proj = app.project_for(key)
+                if proj is None:
+                    return self._json({"error": "Questa mod non è più aperta nell'editor: riaprila."}, 404)
+
+                def num(name, default):
+                    try:
+                        return max(0, int((q.get(name) or [default])[0]))
+                    except ValueError:
+                        return default
+                page = proj.page(num("offset", 0), min(num("limit", 100), 500), (q.get("q") or [""])[0],
+                                 (q.get("state") or [""])[0], (q.get("file") or [""])[0])
+                job = app.jobs.get(key)
+                page["task"] = task_view(app, key)
+                page["job_state"] = job.state if job else None
+                page["can_save"] = bool(job and job.state == "done" and not job.dry and (job.out or job.saved_to))
+                page["name"] = job.name if job else app.uploads.get(key[2:], (None, ""))[1]
+                return self._json(page)
             if u.path == "/api/queue":
                 return self._json(queue_view(app))
             if u.path == "/api/history":
@@ -679,6 +797,81 @@ def make_handler(app: App, port_holder: list):
                     except OSError as e:
                         return self._json({"error": f"Non riesco ad aprire la cartella: {e}"}, 400)
                     return self._json({"ok": True})
+                if u.path == "/api/proj/open":
+                    b = self._body_json()
+                    if b.get("upload_id") not in app.uploads or b.get("lang") not in LANGS or b.get("source") not in LANGS:
+                        return self._json({"error": "Carica prima un file e scegli le lingue"}, 400)
+                    try:
+                        key = app.open_project(b["upload_id"], b["lang"], b["source"])
+                    except Exception as e:  # noqa: BLE001 - file illeggibile: lo si dice
+                        return self._json({"error": f"Non riesco ad aprire la mod: {e}"}, 400)
+                    return self._json({"key": key})
+                if u.path.startswith("/api/proj/"):
+                    b = self._body_json()
+                    key = b.get("key") or ""
+                    proj = app.project_for(key)
+                    if proj is None:
+                        return self._json({"error": "Questa mod non è più aperta nell'editor: riaprila."}, 404)
+                    job = app.jobs.get(key)
+                    if u.path == "/api/proj/edit":
+                        i = int(b.get("i", -1))
+                        if not 0 <= i < len(proj.units):
+                            return self._json({"error": "Riga inesistente"}, 400)
+                        err = proj.edit(i, str(b.get("text") or ""))
+                        if err:
+                            return self._json({"error": err}, 400)
+                        return self._json({"ok": True})
+                    if u.path == "/api/proj/translate":
+                        if (job and job.state in ("queued", "running")) or task_view(app, key)["state"] == "running":
+                            return self._json({"error": "La mod è già in traduzione: aspetta che finisca."}, 409)
+                        if isinstance(b.get("rows"), list):
+                            rows = [int(x) for x in b["rows"] if 0 <= int(x) < len(proj.units)]
+                        else:
+                            f = b.get("filter") or {}
+                            rows = proj.select(str(f.get("q") or ""), str(f.get("state") or ""), str(f.get("file") or ""))
+                        if not rows:
+                            return self._json({"error": "Nessuna riga da tradurre"}, 400)
+                        lane = app.lanes.get(b.get("lane_id") or "")
+                        s = dict(lane.s) if lane else dict(b.get("settings") or {})
+                        s["lang"], s["source"] = proj.target, proj.source
+                        s.setdefault("provider", "anthropic")
+                        err = check_settings(app, s, need_upload=False)
+                        if err:
+                            return self._json({"error": err}, 400)
+                        app.proj_tasks[key] = {"state": "running", "phase": "Avvio", "done": 0, "total": len(rows),
+                                               "error": "", "cancel": threading.Event()}
+                        threading.Thread(target=editor_translate, args=(app, key, proj, rows, s), daemon=True).start()
+                        return self._json({"ok": True, "rows": len(rows)})
+                    if u.path == "/api/proj/cancel":
+                        t = app.proj_tasks.get(key)
+                        if t:
+                            t["cancel"].set()
+                        return self._json({"ok": True})
+                    if u.path == "/api/proj/save":
+                        if not (job and job.state == "done" and not job.dry):
+                            return self._json({"error": "Si può salvare solo una mod già tradotta"}, 400)
+                        if task_view(app, key)["state"] == "running":
+                            return self._json({"error": "Aspetta che finisca la traduzione delle righe"}, 409)
+                        if job.saved_to:
+                            dest = Path(job.saved_to)
+                            as_folder = dest.is_dir()
+                        elif job.out:
+                            dest, as_folder = Path(job.out), False
+                        else:
+                            return self._json({"error": "Il risultato non è più disponibile"}, 400)
+                        rep = proj.build(dest, as_folder, overwrite=True)
+                        job.report = {**(job.report or {}), "translated": rep.translated, "kept_original": rep.kept_original,
+                                      "files": rep.files, "warnings": rep.warnings, "failures": rep.failures}
+                        app.history.update(job.id, translated=rep.translated, kept_original=rep.kept_original,
+                                           files=len(rep.files), warnings=rep.warnings, failures=rep.failures)
+                        return self._json({"ok": True, "translated": rep.translated, "kept_original": rep.kept_original})
+                    if u.path == "/api/proj/close":
+                        if key in app.projects:
+                            app.projects.pop(key).close()
+                        elif job and job.project and job.state not in ("queued", "running"):
+                            pr, job.project = job.project, None
+                            pr.close()
+                        return self._json({"ok": True})
                 m = re.fullmatch(r"/api/cancel/([0-9a-f]{32})", u.path)
                 if m and m.group(1) in app.jobs:
                     app.cancel(app.jobs[m.group(1)])
