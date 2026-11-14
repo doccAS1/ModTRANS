@@ -99,6 +99,18 @@ class History:
             self._save(entries)
             return dest
 
+    def update(self, entry_id: str, **fields) -> bool:
+        """Aggiorna alcuni campi di una voce (dopo che la mod è stata corretta a mano e riscritta)."""
+        with self._lock:
+            entries = self._load()
+            for e in entries:
+                if e["id"] == entry_id:
+                    for k, v in fields.items():
+                        e[k] = list(v)[:MAX_LIST] if k in ("warnings", "failures") else v
+                    self._save(entries)
+                    return True
+        return False
+
     def delete(self, entry_id: str) -> bool:
         """Toglie la voce e, se è uno zip della cronologia, lo cancella. Le cartelle dell'utente non si toccano."""
         with self._lock:
