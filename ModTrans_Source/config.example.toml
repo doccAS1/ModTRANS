@@ -12,6 +12,10 @@ workdir    = "~/.modtrans"   # where the tool keeps manifests, backups, translat
 batch_size = 15              # strings sent to the LLM per request.
                              # Cloud: 15-30 is fine. Small local models: use 5-8.
 
+# Languages (used by the command line; the GUI has its own selectors).
+target_lang_code = "it"      # language to translate into: it, fr, es, de, pt, ru, zh, ja, ko, tr, hu...
+source_lang_name = "Auto"    # language of the mod: "Auto" (detect) or a name such as "English"
+
 # ============================================================================
 #  ENGINES
 #  Every role below (translator, judge_a, judge_b, repair) is configured with
@@ -31,10 +35,11 @@ batch_size = 15              # strings sent to the LLM per request.
 #                 (never paste the key itself in this file).
 #    base_url     (openai_compat only) address of the server.
 #    max_tokens   (optional) max length of each reply. Default 4096.
+#    timeout      (optional) seconds to wait for each reply. Default 120.
 #    temperature  (optional, openai_compat only) creativity. Default 0.2.
 # ============================================================================
 
-# --- Translator: does the actual translation -----------------------
+# --- Translator: does the actual translation --------------------------------
 [translator]
 type = "openai_compat"
 model = "deepseek/deepseek-v4.1-flash"
@@ -56,7 +61,7 @@ type = "openai_compat"
 model = "nvidia/nemotron-3-ultra-550b-a55b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
-# --- Judge B (Fluency): does it sound natural in your language and in-game? -------
+# --- Judge B (Fluency): does it sound natural in the target language and in-game? --
 # Optional. If omitted, the translator's engine is reused for this role.
 [judge_b]
 type = "openai_compat"
