@@ -13,7 +13,7 @@ from pathlib import Path
 from . import bsa as bsa_mod, jsontext, mcm, plugin as pl, strings_file as sf
 from .context import offline_facts, plugin_info
 from .common import Unit
-from .protect import fit_encoding
+from .protect import ProtectionError, fit_encoding, protect, remask
 from .translator import Translator
 
 LANGS = {  # lingua -> (nome file Skyrim, codifica del gioco)
@@ -207,7 +207,7 @@ def _json_jobs(pending, translator, rep, mode, include, exclude):
         elif any(fnmatch.fnmatch(pat, x) for x in include):
             decision[pat] = (True, "scelto da te")
     todo = [p for p in merged if p not in decision]
-    if todo and mode == "auto":
+    if todo and mode == "auto" and translator is not None:
         asked = translator.classify_fields([
             {"id": i, "path": pat, "occurrences": merged[pat]["count"], "files": merged[pat]["files"],
              "samples": merged[pat]["samples"]} for i, pat in enumerate(todo)])
@@ -220,7 +220,9 @@ def _json_jobs(pending, translator, rep, mode, include, exclude):
             else:
                 decision[pat] = (jsontext.looks_like_text(pat, merged[pat]["samples"]), "ripiego")
     for pat in todo:
-        decision.setdefault(pat, (False, "non analizzato"))
+        if pat not in decision:                      # senza AI (anteprima) o in modalità "known"
+            decision[pat] = ((jsontext.looks_like_text(pat, merged[pat]["samples"]), "ripiego")
+                             if mode == "auto" else (False, "non analizzato"))
     jobs, units = [], []
     for rel, text, e, bom, found, data in pending:
         paths = sorted(known_by_file[rel])
@@ -250,44 +252,67 @@ def _json_jobs(pending, translator, rep, mode, include, exclude):
     return jobs, units
 
 
-def run(src: Path, dest: Path, translator: Translator, target: str,
-        source: str = "english", progress=None, as_folder: bool = False, overwrite: bool = False,
-        json_mode: str = "auto", json_include=(), json_exclude=()) -> Report:
-    tgt_name, enc = LANGS[target.lower()]
-    src_name, _ = LANGS[source.lower()]
-    rep = Report()
-    with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
-        root = prepare_input(src, work)
-        out = work / "out"
-        shutil.copytree(root, out)
+_TRIVIAL = ("vuota", "chiave di traduzione ($KEY)", "nessun testo da tradurre")
 
-        sources = []  # (relpath, dati originali)
-        loose = {}
-        for p in sorted(root.rglob("*")):
+
+class Project:
+    """Una mod aperta: stringhe estratte, traduzioni (dell'AI e scritte a mano) e riscrittura dei file.
+
+    Serve sia a `run()` (apri → traduci → scrivi) sia all'editor della pagina, che mostra le righe prima, durante e
+    dopo la traduzione, permette di correggerle a mano o di tradurne solo alcune, e riscrive il risultato."""
+
+    def __init__(self, src: Path, target: str, source: str = "english", json_mode: str = "auto",
+                 json_include=(), json_exclude=(), translator: Translator | None = None):
+        self.target, self.source = target.lower(), source.lower()
+        self.tgt_name, self.enc = LANGS[self.target]
+        self.src_name, _ = LANGS[self.source]
+        self.json_mode, self.json_include, self.json_exclude = json_mode, tuple(json_include), tuple(json_exclude)
+        self.lock = threading.RLock()
+        self.auto: dict[tuple, str] = {}        # traduzioni dell'AI, per (file, posizione)
+        self.manual: dict[tuple, str] = {}      # traduzioni scritte a mano: hanno la precedenza
+        self.why: dict[tuple, str] = {}         # perché una riga non è stata tradotta
+        self.stats: dict = {}
+        self.tr_warnings: list[str] = []
+        self._skip: dict[tuple, bool] = {}
+        self.live: dict | None = None           # cache del traduttore in corso (righe già tradotte, non ancora consolidate)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self._tmp.name)
+        try:
+            self.root = prepare_input(src, self.work)
+            self._collect()
+        except BaseException:
+            self.close()
+            raise
+        self.classify(translator)
+
+    def close(self) -> None:
+        self._tmp.cleanup()
+
+    # ------------------------------------------------------------------ analisi
+    def _collect(self) -> None:
+        enc, src_name, rep = self.enc, self.src_name, Report()
+        self.rep = rep
+        sources, loose = [], {}  # (relpath, dati originali, archivio)
+        for p in sorted(self.root.rglob("*")):
             if p.is_file():
-                rel = p.relative_to(root).as_posix()
+                rel = p.relative_to(self.root).as_posix()
                 loose[rel.lower()] = rel
                 sources.append((rel, p.read_bytes() if _wanted(rel, src_name) else None, None))
-        sources += _from_archives(root, loose, src_name, rep)
-
-        jobs = []  # (kind di file, relpath, oggetto, byte originali)
-        all_units: list[Unit] = []
-        json_pending = []
+        sources += _from_archives(self.root, loose, src_name, rep)
+        self._fixed_jobs, self._fixed_units, self._json_pending = [], [], []
         for rel, data, origin in sources:
             ext = Path(rel).suffix.lower()
-            name = Path(rel).name
             if data is None:
                 continue
             try:
                 if ext in PLUGIN_EXT:
                     obj = pl.Plugin(data)
                     u, w = pl.extract_units(obj, enc, rel)
-                    jobs.append(("plugin", rel, obj, data))
+                    self._fixed_jobs.append(("plugin", rel, obj, data))
                 elif ext in STRINGS_EXT:
                     obj = sf.StringsFile(data, ext)
                     u, w = sf.extract_units(obj, enc, rel, ext[1:])
-                    jobs.append(("strings", rel, obj, data))
+                    self._fixed_jobs.append(("strings", rel, obj, data))
                 elif ext == ".json":
                     if len(data) > 30_000_000:
                         continue
@@ -298,63 +323,178 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                         if '"lines"' in text or '"text"' in text:
                             rep.warnings.append(f"{rel}: JSON non analizzabile, copiato senza modifiche ({ex})")
                         continue
-                    json_pending.append((rel, text, e, bom, found, data))
+                    self._json_pending.append((rel, text, e, bom, found, data))
                     continue
                 else:
                     text, e, bom = mcm.decode(data)
                     u, w = mcm.extract_units(text, rel), []
-                    jobs.append(("mcm", rel, (text, e, bom), data))
+                    self._fixed_jobs.append(("mcm", rel, (text, e, bom), data))
             except (pl.PluginError, sf.StringsError, UnicodeError, bsa_mod.BsaError) as e:
                 rep.warnings.append(f"{rel}: non analizzabile, copiato senza modifiche ({e})")
                 continue
             if origin:
                 rep.warnings.append(f"Info: {rel} letto dall'archivio {origin}")
             rep.warnings += w
-            all_units += u
+            self._fixed_units += u
 
-        if json_pending:
-            if not translator.brief:
-                translator.set_brief(offline_facts(
-                    [plugin_info(obj, rel, enc) for k, rel, obj, _ in jobs if k == "plugin"]))
-            jj, ju = _json_jobs(json_pending, translator, rep, json_mode, tuple(json_include), tuple(json_exclude))
-            jobs += jj
-            all_units += ju
-
-        kinds = {k for k, *_ in jobs}
-        localized = [rel for k, rel, obj, _ in jobs if k == "plugin" and obj.localized]
-        if localized and "strings" not in kinds:
-            rep.warnings.append(
-                f"{', '.join(localized)}: plugin localizzato, ma non ho trovato file Strings in "
-                f"{source.capitalize()} né sciolti né dentro i .bsa: per questo plugin non c'è nulla da tradurre")
-
+    def ensure_brief(self, translator: Translator) -> None:
         if not translator.brief:  # contesto minimo sempre disponibile: autore, descrizione, dipendenze
             translator.set_brief(offline_facts(
-                [plugin_info(obj, rel, enc) for k, rel, obj, _ in jobs if k == "plugin"]))
+                [plugin_info(obj, rel, self.enc) for k, rel, obj, _ in self._fixed_jobs if k == "plugin"]))
 
-        fit = lambda s: fit_encoding(s, enc)
-        mcm_fit = lambda s: s
-        # MCM è unicode: nessun vincolo di codifica
-        by_kind = {"mcm": [x for x in all_units if x.kind == "ui_label"]}
-        main = [x for x in all_units if x.kind not in ("ui_label", "json_dialogue")]
-        json_units = [x for x in all_units if x.kind == "json_dialogue"]
-        results = {}
-        results.update(translator.translate_all([(u.kind, u.text) for u in main], fit, progress))
-        results.update(translator.translate_all([(u.kind, u.text) for u in by_kind["mcm"]], mcm_fit, progress))
-        results.update(translator.translate_all([(u.kind, u.text) for u in json_units], mcm_fit, progress))
+    def classify(self, translator: Translator | None) -> None:
+        """Decide quali campi dei JSON sono testo (con l'AI se c'è un traduttore, altrimenti con il ripiego)."""
+        self._jrep = Report()
+        jj, ju = [], []
+        if self._json_pending:
+            if translator is not None:
+                self.ensure_brief(translator)
+            jj, ju = _json_jobs(self._json_pending, translator, self._jrep, self.json_mode,
+                                self.json_include, self.json_exclude)
+        self.jobs = self._fixed_jobs + jj
+        self.units: list[Unit] = self._fixed_units + ju
+        kinds = {k for k, *_ in self.jobs}
+        localized = [rel for k, rel, obj, _ in self.jobs if k == "plugin" and obj.localized]
+        self._localized_warning = []
+        if localized and "strings" not in kinds:
+            self._localized_warning.append(
+                f"{', '.join(localized)}: plugin localizzato, ma non ho trovato file Strings in "
+                f"{self.source.capitalize()} né sciolti né dentro i .bsa: per questo plugin non c'è nulla da tradurre")
+
+    @staticmethod
+    def key(u: Unit) -> tuple:
+        return (u.file, repr(u.locator))
+
+    # ------------------------------------------------------------------ traduzione
+    def translate(self, translator: Translator, progress=None, only=None) -> None:
+        """Traduce con l'AI le righe indicate (`only` = posizioni; None = tutte), tranne quelle scritte a mano."""
+        self.ensure_brief(translator)
+        self.live = translator.cache
+        units = [u for i, u in enumerate(self.units)
+                 if (only is None or i in only) and self.key(u) not in self.manual]
+        fit, same = (lambda s: fit_encoding(s, self.enc)), (lambda s: s)
+        results: dict = {}
+        for sel, f in (([u for u in units if u.kind not in ("ui_label", "json_dialogue")], fit),
+                       ([u for u in units if u.kind == "ui_label"], same),    # MCM e JSON sono unicode: nessun vincolo
+                       ([u for u in units if u.kind == "json_dialogue"], same)):
+            results.update(translator.translate_all([(u.kind, u.text) for u in sel], f, progress))
+        with self.lock:
+            for u in units:
+                k = (u.kind, u.text)
+                if k in results:
+                    self.auto[self.key(u)] = results[k]
+                    self.why.pop(self.key(u), None)
+                else:
+                    self.auto.pop(self.key(u), None)
+                    self.why[self.key(u)] = translator.failed.get(k, "non tradotta")
+            for k, v in translator.stats.items():
+                self.stats[k] = self.stats.get(k, 0) + v if k in ("requests", "from_memory", "shortened", "qa_checked",
+                                                                  "qa_fixed", "retries") else v
+            self.tr_warnings = list(dict.fromkeys(self.tr_warnings + translator.warnings))
+        self.live = None
+
+    def effective(self, u: Unit) -> str | None:
+        return self.manual.get(self.key(u)) or self.auto.get(self.key(u))
+
+    def edit(self, i: int, text: str) -> str | None:
+        """Traduzione scritta a mano per la riga `i`. Ritorna il motivo del rifiuto, oppure None se va bene.
+        Testo vuoto = si torna alla traduzione dell'AI (o all'originale)."""
+        u = self.units[i]
+        with self.lock:
+            if not text.strip():
+                self.manual.pop(self.key(u), None)
+                return None
+            p = protect(u.text)
+            if p.skip_reason:
+                return f"Questa riga non si traduce ({p.skip_reason})."
+            nl = "\r\n" if "\r\n" in u.text else ("\r" if "\r" in u.text and "\n" not in u.text else "\n")
+            text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", nl)
+            if remask(p, text) is None:
+                return ("Tag, variabili o a capo diversi dall'originale: devono restare uguali "
+                        "(per esempio <Alias=Player>, %s, [PLAYERNAME]).")
+            if u.kind not in ("ui_label", "json_dialogue"):
+                try:
+                    fit_encoding(text, self.enc)
+                except ProtectionError as e:
+                    return str(e)
+            self.manual[self.key(u)] = p.lead + text.strip() + p.trail
+        return None
+
+    def _row(self, u: Unit, live: dict):
+        key = self.key(u)
+        if key in self.manual:
+            return self.manual[key], "edited", None
+        if key in self.auto:
+            return self.auto[key], "done", None
+        if (u.kind, u.text) in live:
+            return live[(u.kind, u.text)], "done", None
+        why = self.why.get(key)
+        if key not in self._skip:
+            self._skip[key] = bool(protect(u.text).skip_reason)
+        if why in _TRIVIAL or self._skip[key]:
+            return None, "skip", why
+        return None, ("failed" if why else "todo"), why
+
+    @staticmethod
+    def _match(u: Unit, tr, q: str, state: str, file: str, st: str) -> bool:
+        if file and u.file != file or state and st != state:
+            return False
+        return not q or q in u.text.lower() or (tr is not None and q in tr.lower())
+
+    def page(self, offset: int = 0, limit: int = 100, q: str = "", state: str = "", file: str = "") -> dict:
+        """Una pagina di righe (originale + traduzione + stato) con filtri, i conteggi per stato e l'elenco dei file."""
+        live, q = self.live or {}, q.strip().lower()
+        counts: dict[str, int] = {}
+        hits = []
+        for i, u in enumerate(self.units):
+            tr, st, why = self._row(u, live)
+            counts[st] = counts.get(st, 0) + 1
+            if self._match(u, tr, q, state, file, st):
+                hits.append((i, u, tr, st, why))
+        rows = [{"i": i, "file": u.file, "kind": u.kind, "orig": u.text, "tr": tr, "state": st, "why": why}
+                for i, u, tr, st, why in hits[offset:offset + limit]]
+        return {"total": len(self.units), "matched": len(hits), "counts": counts, "rows": rows,
+                "files": sorted({u.file for u in self.units})}
+
+    def select(self, q: str = "", state: str = "", file: str = "") -> list[int]:
+        """Posizioni delle righe che corrispondono ai filtri (per tradurle in blocco)."""
+        live, q = self.live or {}, q.strip().lower()
+        out = []
+        for i, u in enumerate(self.units):
+            tr, st, _ = self._row(u, live)
+            if st != "skip" and self._match(u, tr, q, state, file, st):
+                out.append(i)
+        return out
+
+    # ------------------------------------------------------------------ scrittura
+    def build(self, dest: Path, as_folder: bool = False, overwrite: bool = False) -> Report:
+        """Riscrive i file con le traduzioni attuali (anche quelle a mano) e produce lo zip o la cartella."""
+        with self.lock:
+            return self._build(dest, as_folder, overwrite)
+
+    def _build(self, dest: Path, as_folder: bool, overwrite: bool) -> Report:
+        enc, src_name, tgt_name = self.enc, self.src_name, self.tgt_name
+        rep = Report()
+        rep.warnings = list(self.rep.warnings) + list(self._jrep.warnings) + list(self._localized_warning)
+        rep.json_fields = list(self._jrep.json_fields)
+        out = self.work / "out"
+        if out.exists():
+            shutil.rmtree(out)
+        shutil.copytree(self.root, out)
 
         def lookup(u: Unit):
-            t = results.get((u.kind, u.text))
+            t = self.effective(u)
             if t is None:
-                why = translator.failed.get((u.kind, u.text), "non tradotta")
-                if why not in ("vuota", "chiave di traduzione ($KEY)", "nessun testo da tradurre"):
+                why = self.why.get(self.key(u), "non tradotta")
+                if why not in _TRIVIAL:
                     rep.kept_original += 1                 # le stringhe vuote/chiavi non sono "mancate": non c'era nulla da tradurre
                     rep.failures.append(f"{u.file} [{u.kind}] {u.text[:60]!r}: {why}")
             else:
                 rep.translated += 1
             return t
 
-        for kind, rel, obj, orig in jobs:
-            units = [u for u in all_units if u.file == rel]
+        for kind, rel, obj, orig in self.jobs:
+            units = [u for u in self.units if u.file == rel]
             changes = {u.locator: t for u in units if (t := lookup(u)) is not None}
             if not changes:
                 continue
@@ -399,8 +539,21 @@ def run(src: Path, dest: Path, translator: Translator, target: str,
                 rel = newrel
             rep.files.append(rel)
 
-        rep.from_memory, rep.requests = translator.stats["from_memory"], translator.stats["requests"]
-        rep.shortened, rep.qa_checked, rep.qa_fixed = (translator.stats[k] for k in ("shortened", "qa_checked", "qa_fixed"))
-        rep.warnings += [f"Controllo: {w}" for w in dict.fromkeys(translator.warnings)]
+        s = self.stats
+        rep.from_memory, rep.requests = s.get("from_memory", 0), s.get("requests", 0)
+        rep.shortened, rep.qa_checked, rep.qa_fixed = (s.get(k, 0) for k in ("shortened", "qa_checked", "qa_fixed"))
+        rep.warnings += [f"Controllo: {w}" for w in self.tr_warnings]
         rep.output = str(write_output(out, dest, as_folder, overwrite))
-    return rep
+        shutil.rmtree(out, ignore_errors=True)
+        return rep
+
+
+def run(src: Path, dest: Path, translator: Translator, target: str,
+        source: str = "english", progress=None, as_folder: bool = False, overwrite: bool = False,
+        json_mode: str = "auto", json_include=(), json_exclude=()) -> Report:
+    proj = Project(src, target, source, json_mode, json_include, json_exclude, translator=translator)
+    try:
+        proj.translate(translator, progress)
+        return proj.build(dest, as_folder, overwrite)
+    finally:
+        proj.close()

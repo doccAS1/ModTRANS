@@ -25,6 +25,7 @@ class FakeAI:
             self.gate.set()
         self.requests = 0
         self.models: set[str] = set()                   # modelli visti nelle richieste di traduzione
+        self.texts: list[str] = []                       # testi ricevuti dalle richieste di traduzione
         self.auth: set[str | None] = set()               # intestazioni Authorization viste (per controllare quale chiave arriva)
         outer = self
 
@@ -38,6 +39,7 @@ class FakeAI:
                     outer.gate.wait(10)
                     outer.requests += 1
                     outer.models.add(body["model"])
+                    outer.texts += [i["text"] for i in items]
                     reply = json.dumps([{"id": i["id"], "text": "IT " + i["text"]} for i in items])
                 except ValueError:
                     reply = "OK"                                   # il controllo iniziale della connessione

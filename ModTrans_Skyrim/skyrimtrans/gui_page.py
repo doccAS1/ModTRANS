@@ -61,6 +61,18 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
 .lane .pm{font-size:13px;color:var(--warn);margin:0 0 8px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
 .modal .card{max-width:520px;width:100%;margin:0;max-height:90vh;overflow:auto}
+.modal .card.ed{max-width:1180px;height:92vh;display:flex;flex-direction:column;padding:14px}
+.edhead{display:flex;gap:10px;align-items:center;margin-bottom:8px}.edhead b{font-size:15px}.edhead .note{flex:1}
+.edbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.edbar input[type=text]{flex:1;min-width:160px;width:auto}.edbar select{width:auto;max-width:240px}
+#edTable{flex:1;overflow:auto;border-top:1px solid var(--line)}
+.edr{display:grid;grid-template-columns:96px 1fr 1fr 48px;gap:10px;padding:8px 8px 8px 6px;border-bottom:1px solid var(--line);border-left:4px solid var(--line);font-size:14px}
+.edr.done{border-left-color:var(--accent)}.edr.edited{border-left-color:var(--warn)}.edr.failed{border-left-color:var(--bad)}.edr.skip{opacity:.55}
+.edr .k{font-size:11px;color:var(--mute);word-break:break-all}
+.edr .o{white-space:pre-wrap;word-break:break-word}
+.edr textarea{min-height:2.4em;font-family:inherit;font-size:14px;resize:vertical}
+.edr .er{grid-column:2/4;color:var(--bad);font-size:12px}
+.edpager{display:flex;gap:10px;align-items:center;justify-content:center;padding-top:8px;font-size:13px;color:var(--mute)}
 .lane .empty{font-size:13px;color:var(--mute);margin:0 0 4px}
 .stage h3{font-size:12px;margin:0 0 6px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .hist .meta{font-size:12px;color:var(--mute)}
@@ -192,6 +204,19 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
   <p class="note">Vale per le mod in attesa e per quelle che aggiungi dopo. La mod in corso finisce con le impostazioni di prima.</p>
   <div style="display:flex;gap:8px;justify-content:flex-end"><span id="leErr" class="err" style="flex:1"></span>
     <button class="sec" id="leCancel" type="button">Annulla</button><button id="leSave" type="button">Salva</button></div>
+</div></div>
+<div id="editor" class="modal hide"><div class="card ed">
+  <div class="edhead"><b id="edTitle">Stringhe</b><span id="edInfo" class="note"></span><button class="sec sm" id="edClose" type="button">Chiudi</button></div>
+  <div class="edbar">
+    <input type="text" id="edQ" placeholder="Cerca nel testo originale o tradotto…" autocomplete="off">
+    <select id="edState"><option value="">Tutte</option><option value="todo">Da tradurre</option><option value="done">Tradotte (AI)</option><option value="edited">Modificate a mano</option><option value="failed">Non riuscite</option></select>
+    <select id="edFile"><option value="">Tutti i file</option></select>
+    <button class="sec sm" id="edAI" type="button">Traduci con l&rsquo;AI quelle filtrate</button>
+    <button class="sm" id="edSave" type="button">Salva nel file</button>
+  </div>
+  <div id="edMsg" class="note" style="min-height:20px"></div>
+  <div id="edTable"></div>
+  <div class="edpager"><button class="sec sm" id="edPrev" type="button">&larr;</button><span id="edRange"></span><button class="sec sm" id="edNext" type="button">&rarr;</button></div>
 </div></div>
 <script>
 const T="__TOKEN__", D=__DEFAULTS__;
@@ -361,6 +386,7 @@ function jobRow(j){
   const pct=run?(j.total?Math.round(100*j.done/j.total):3):null;
   const badge=run?(j.phase+(j.total?" "+j.done+"/"+j.total:"")):STATE_TXT[j.state]+(j.dry&&j.state==="done"?" (analisi)":"");
   const r=qrow(j.name,badge,j.state==="done"?"ok":(j.state==="error"?"bad":""),pct,viewJob===j.id,()=>{ viewJob=j.id; autoFollow=false; shownKey=null; refreshView() });
+  if(run||j.state==="done") r.acts.appendChild(btn("Stringhe",()=>openEditor(j.id)));
   if(j.state==="queued"||run) r.acts.appendChild(btn("Annulla",()=>api("/api/cancel/"+j.id,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{})));
   if(j.state==="done"&&j.downloadable){ const a=el("a","sm","Scarica"); a.href="/api/download/"+j.id+"?t="+encodeURIComponent(T); a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
   if(j.state==="done"&&j.saved_to) r.acts.appendChild(btn("Apri cartella",()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#msg").textContent=e.message})));
@@ -383,6 +409,94 @@ function laneBox(l,jobs){
   if(!jobs.length) box.appendChild(el("p","empty","Nessuna mod in questa coda."));
   box.appendChild(ul); return box;
 }
+
+// ---------------------------------------------------------------- editor delle stringhe
+const ED={key:null,offset:0,limit:100,q:"",state:"",file:"",data:null,timer:null,seq:0};
+const ED_STATE={todo:"da tradurre",done:"tradotte",edited:"a mano",failed:"non riuscite",skip:"senza testo"};
+function edMsg(m,bad){ const e=$("#edMsg"); e.textContent=m||""; e.className=bad?"err":"note" }
+async function openEditor(key){
+  ED.key=key; ED.offset=0; ED.q=""; ED.state=""; ED.file=""; $("#edQ").value=""; $("#edState").value=""; $("#edFile").innerHTML='<option value="">Tutti i file</option>';
+  $("#editor").classList.remove("hide"); edMsg("Carico le stringhe…"); $("#edTable").innerHTML=""; await edLoad(true);
+}
+async function openEditorForItem(it){
+  $("#msg").textContent="Apro la mod…";
+  try{ const r=await api("/api/proj/open",{method:"POST",body:JSON.stringify({upload_id:it.upload_id,lang:$("#lang").value,source:$("#source").value})}); $("#msg").textContent=""; openEditor(r.key) }
+  catch(e){ $("#msg").textContent=e.message }
+}
+function edQuery(){ return "key="+encodeURIComponent(ED.key)+"&offset="+ED.offset+"&limit="+ED.limit+"&q="+encodeURIComponent(ED.q)+"&state="+ED.state+"&file="+encodeURIComponent(ED.file) }
+async function edLoad(force){
+  clearTimeout(ED.timer); const my=++ED.seq;
+  try{
+    const d=await api("/api/proj/page?"+edQuery()+"&t="+Date.now()); if(my!==ED.seq||$("#editor").classList.contains("hide"))return;
+    ED.data=d; const typing=document.activeElement&&document.activeElement.closest&&document.activeElement.closest("#edTable")&&document.activeElement.tagName==="TEXTAREA";
+    if(force||!typing) edRender(d); else edInfo(d);
+    const busy=d.task.state==="running"||d.job_state==="running"||d.job_state==="queued";
+    if(busy) ED.timer=setTimeout(()=>edLoad(false),1000);
+  }catch(e){ edMsg(e.message,true) }
+}
+function edInfo(d){
+  const c=d.counts||{}, parts=Object.keys(ED_STATE).filter(k=>c[k]).map(k=>c[k]+" "+ED_STATE[k]);
+  $("#edTitle").textContent="Stringhe — "+(d.name||""); $("#edInfo").textContent=d.total+" righe · "+parts.join(" · ");
+  $("#edSave").classList.toggle("hide",!d.can_save);
+  const t=d.task||{}; let m="";
+  if(t.state==="running") m=(t.phase||"Traduco")+(t.total?" "+t.done+"/"+t.total:"")+"…";
+  else if(t.state==="error") m=t.error; else if(d.job_state==="running") m="La mod è in traduzione: le righe compaiono man mano.";
+  if(m||!$("#edMsg").dataset.keep) edMsg(m,t.state==="error");
+  $("#edAI").textContent=t.state==="running"?"Interrompi":"Traduci con l’AI quelle filtrate";
+  $("#edAI").disabled=d.job_state==="running"||d.job_state==="queued";
+}
+function edRender(d){
+  edInfo(d);
+  const sel=$("#edFile"); if(sel.options.length<=1){ for(const f of d.files){const o=document.createElement("option");o.value=f;o.textContent=f;sel.appendChild(o)} sel.value=ED.file }
+  const T=$("#edTable"); T.innerHTML="";
+  for(const r of d.rows){
+    const row=el("div","edr "+r.state);
+    const k=el("div","k",r.kind+"\n"+r.file.split("/").pop()); k.style.whiteSpace="pre-line"; k.title=r.file; row.appendChild(k);
+    row.appendChild(el("div","o",r.orig));
+    const ta=document.createElement("textarea"); ta.value=r.tr||""; ta.rows=Math.min(8,Math.max(1,Math.ceil(r.orig.length/60)));
+    ta.placeholder=r.state==="skip"?"(non si traduce)":(r.why?r.why:"(non tradotta)"); ta.disabled=r.state==="skip"; let was=ta.value;
+    const err=el("div","er"); err.classList.add("hide");
+    ta.onblur=async()=>{ if(ta.value===was)return;
+      try{ await api("/api/proj/edit",{method:"POST",body:JSON.stringify({key:ED.key,i:r.i,text:ta.value})}); was=ta.value; err.classList.add("hide");
+           row.className="edr "+(ta.value.trim()?"edited":"todo"); edLoad(false) }
+      catch(e){ err.textContent=e.message; err.classList.remove("hide") } };
+    row.appendChild(ta);
+    const ai=btn("AI",()=>edTranslate({rows:[r.i]}),"sec sm"); ai.title="Traduci questa riga con l'AI"; ai.disabled=r.state==="skip"; row.appendChild(ai);
+    row.appendChild(err); T.appendChild(row);
+  }
+  if(!d.rows.length) T.appendChild(el("p","empty","Nessuna riga con questi filtri."));
+  const a=d.matched?ED.offset+1:0, b=Math.min(d.matched,ED.offset+ED.limit);
+  $("#edRange").textContent=a+"–"+b+" di "+d.matched+(d.matched!==d.total?" (filtrate)":"");
+  $("#edPrev").disabled=ED.offset<=0; $("#edNext").disabled=ED.offset+ED.limit>=d.matched;
+}
+function edLaneOrSettings(){
+  const j=lastQ&&lastQ.jobs.find(x=>x.id===ED.key);
+  return j&&j.lane?{lane_id:j.lane}:{settings:currentSettings()};
+}
+async function edTranslate(sel){
+  edMsg("Avvio la traduzione…");
+  try{ await api("/api/proj/translate",{method:"POST",body:JSON.stringify({key:ED.key,...sel,...edLaneOrSettings()})}); edLoad(true) }
+  catch(e){ edMsg(e.message,true) }
+}
+$("#edAI").onclick=()=>{
+  if(ED.data&&ED.data.task.state==="running") return api("/api/proj/cancel",{method:"POST",body:JSON.stringify({key:ED.key})}).then(()=>edLoad(true));
+  const f={q:ED.q,state:ED.state,file:ED.file};
+  if(!ED.state) f.state="todo";                      // senza filtro di stato: solo quelle ancora da tradurre
+  edTranslate({filter:f});
+};
+$("#edSave").onclick=async()=>{
+  edMsg("Salvo…");
+  try{ const r=await api("/api/proj/save",{method:"POST",body:JSON.stringify({key:ED.key})}); $("#edMsg").dataset.keep="1";
+       edMsg("Salvato: "+r.translated+" stringhe tradotte"+(r.kept_original?", "+r.kept_original+" rimaste in originale":"")+". Il file scaricabile è aggiornato."); pollQueue() }
+  catch(e){ edMsg(e.message,true) }
+};
+let edT=null; $("#edQ").oninput=()=>{ clearTimeout(edT); edT=setTimeout(()=>{ ED.q=$("#edQ").value; ED.offset=0; edLoad(true) },300) };
+$("#edState").onchange=()=>{ ED.state=$("#edState").value; ED.offset=0; edLoad(true) };
+$("#edFile").onchange=()=>{ ED.file=$("#edFile").value; ED.offset=0; edLoad(true) };
+$("#edPrev").onclick=()=>{ ED.offset=Math.max(0,ED.offset-ED.limit); edLoad(true); $("#edTable").scrollTop=0 };
+$("#edNext").onclick=()=>{ ED.offset+=ED.limit; edLoad(true); $("#edTable").scrollTop=0 };
+$("#edClose").onclick=()=>{ clearTimeout(ED.timer); ED.seq++; $("#editor").classList.add("hide"); $("#edMsg").dataset.keep="" };
+
 let editingLane=null;
 for(const [k,l] of D.langs){for(const id of ["le_lang","le_source"]){const o=document.createElement("option");o.value=k;o.textContent=l;$("#"+id).appendChild(o)}}
 for(const o of document.querySelectorAll("#preset option")){ $("#le_preset").appendChild(o.cloneNode(true)) }
@@ -432,6 +546,7 @@ function renderQueue(){
     const badge=it.status==="upload"?"Caricamento "+it.pct+"%":(it.status==="fail"?it.err:"Pronta");
     const r=qrow(it.name,badge,it.status==="fail"?"bad":"",it.status==="upload"?it.pct:null,sel===i,()=>selectItem(i));
     if(it.status==="ready") r.acts.appendChild(btn("Contesto",()=>selectItem(i)));
+    if(it.status==="ready") r.acts.appendChild(btn("Stringhe",()=>openEditorForItem(it)));
     r.acts.appendChild(btn("✕",()=>{ saveFields(); const cur=items[sel]; items.splice(i,1); const ni=items.indexOf(cur); if(ni>=0){sel=ni}else{sel=-1; selectItem(items.length?items.length-1:-1)} syncGo(); renderQueue() }));
     SL.appendChild(r.li);
   });
