@@ -12,6 +12,8 @@
 - Review and Restore buttons are turned off while a translation is running, and Restore now tells
   you how many older backups are still available.
 - The whole tool (messages, prompts, review notes) is now in English.
+- Command line: choose the languages with `-l fr` and `-s English`, or with `target_lang_code` and
+  `source_lang_name` in the config.
 
 ### Fixed
 - Translating the same mod into several languages could mix or stack languages. Each language is now
@@ -26,6 +28,9 @@
 - Glossary terms with punctuation (like `C++`) and Chinese/Japanese/Korean terms now match.
 - More game codes are protected during translation: `[O 388]`, `$1`, `$A` and the arguments of `$q` / `$r`.
 - Several backups made in the same second no longer overwrite each other.
+- With only a language code in the config (e.g. `fr`), the AI was still told to translate into Italian.
+- The backup count shown after Restore was wrong for languages other than Italian.
+- The translation memory database is now always closed, and small files are closed right after reading.
 
 ### Security
 - A text in the mod can no longer smuggle new game codes into the translation.
