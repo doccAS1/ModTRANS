@@ -39,20 +39,3 @@
   playable. Use "Manual Review" to correct them.
 - Antivirus programs sometimes flag PyInstaller executables by mistake. The project is open source,
   so you can run it from source or build the .exe yourself.
-
-## SkyrimTrans 0.1.0 (Skyrim LE/SE, in development)
-
-A separate translator for Skyrim mods, in `ModTrans_Skyrim/`. Not released yet.
-
-- Translates plugins (`.esp/.esm/.esl`), Strings files, MCM files and dialogue JSON, touching only text.
-  Strings and MCM files are also read from inside `.bsa` archives.
-- Browser-based GUI that runs only on your PC, command line, and a Windows .exe build.
-- Works with Claude or any OpenAI-compatible service, including local models.
-- Official glossary built from the game's own Strings files, and consistent term translations across batches.
-- Context about the mod is given to the model.
-- Quality checks: changed numbers and assistant artifacts are retried, too-long lines are shortened,
-  optional AI review.
-- Interrupted runs can be resumed (translation memory on disk); damaged AI replies are recovered and
-  failing batches are split.
-- Queue of mods, parallel lanes with their own AI service and settings, and download history.
-- You choose where to save the result (folder or zip); originals are never overwritten.
