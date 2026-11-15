@@ -13,6 +13,15 @@ class TranslationMemory:
         self.db.execute("UPDATE OR IGNORE tm SET gloss = gloss || '.it' WHERE instr(gloss, '.') = 0")
         self.db.commit()
 
+    def close(self):
+        self.db.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
     def get(self, game, src, gloss):
         r = self.db.execute("SELECT dst FROM tm WHERE game=? AND src=? AND gloss=?",
                             (game, src, gloss)).fetchone()

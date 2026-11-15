@@ -87,7 +87,8 @@ class Project:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "manifest.json"
         if self.path.exists():
-            self.m = json.load(open(self.path, encoding="utf-8"))
+            with open(self.path, encoding="utf-8") as f:
+                self.m = json.load(f)
         else:  # prima volta: ciò che esiste già nel file di output della lingua è dell'autore, non nostro
             self.m = {"game": game, "mod_id": mod_id, "foreign_keys": sorted(existing_output_keys),
                       "units": {}}
@@ -142,7 +143,7 @@ class Project:
             else:
                 rec["created"].append(rel)
         b.mkdir(parents=True, exist_ok=True)
-        json.dump(rec, open(b / "backup.json", "w"))
+        atomic_write_text(b / "backup.json", json.dumps(rec))
 
     def backups_left(self):
         root = self.dir / "backups"
@@ -153,7 +154,8 @@ class Project:
         if not root.exists() or not any(root.iterdir()):
             return False
         b = sorted(root.iterdir())[-1]
-        rec = json.load(open(b / "backup.json"))
+        with open(b / "backup.json", encoding="utf-8") as f:
+            rec = json.load(f)
         for rel in rec["existing"]:
             shutil.copy2(b / rel, Path(mod_dir) / rel)
         for rel in rec["created"]:

@@ -1,9 +1,10 @@
-import json
+import contextlib, json
 from pathlib import Path
 
 from .adapters.stardew import ADAPTERS
 from .core.fsutil import valid_lang
 from .core.glossary import Glossary
+from .core.langs import lang_name
 from .core.masking import mask, strip_tokens, unmask
 from .core.memory import TranslationMemory
 from .core.models import Decision
@@ -25,6 +26,17 @@ def _lang(cfg):
         return valid_lang(cfg.get("target_lang_code", "it"))
     except ValueError as e:
         raise SystemExit(str(e))
+
+
+def _lang_names(cfg):
+    """(destinazione, sorgente) per i prompt. Se il config ha solo il codice, il nome si ricava da quello."""
+    target = cfg.get("target_lang_name") or lang_name(_lang(cfg))
+    return target, cfg.get("source_lang_name") or "Auto"
+
+
+def _load_json(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def pick_adapter(mod_dir, game, target_code="it"):
@@ -60,13 +72,18 @@ def _record_written(adapter, units, mapping, originals):
 
 
 def run(mod_dir, cfg, dry_run=False, log=print):
+    # ExitStack: la translation memory (SQLite) viene chiusa anche se il run si interrompe
+    with contextlib.ExitStack() as stack:
+        return _run(mod_dir, cfg, dry_run, log, stack)
+
+
+def _run(mod_dir, cfg, dry_run, log, stack):
     game = cfg.get("game", "stardew")
     workdir = Path(cfg.get("workdir", "~/.modtrans")).expanduser()
     
     # 1. Recupera le lingue passate dalla GUI
     target_code = _lang(cfg)
-    target_name = cfg.get("target_lang_name", "Italian")
-    source_name = cfg.get("source_lang_name", "Auto")
+    target_name, source_name = _lang_names(cfg)
     
     # 2. Inizializza l'adapter passandogli il codice lingua
     adapter = pick_adapter(mod_dir, game, target_code)
@@ -80,7 +97,7 @@ def run(mod_dir, cfg, dry_run=False, log=print):
         log(f"✗ {adapter.mod_name}: no translatable files found (i18n/default.json and content.json are missing).")
         return None
         
-    preset = json.load(open(PKG / "presets" / f"{game}.json", encoding="utf-8"))
+    preset = _load_json(PKG / "presets" / f"{game}.json")
     
     glossary = Glossary.load(PKG / "presets" / f"{game}_glossary.json")
     gh = glossary.hash()
@@ -88,7 +105,7 @@ def run(mod_dir, cfg, dry_run=False, log=print):
     
     existing = adapter.read_output()
     project = Project(workdir, game, adapter.mod_id, adapter.mod_version, existing.keys(), target_code)
-    tm = TranslationMemory(workdir / "tm.sqlite")
+    tm = stack.enter_context(TranslationMemory(workdir / "tm.sqlite"))
     
     # Inizializza i motori. Se mancano nel TOML, diventano None
     t_eng = make_engine(cfg["translator"])
@@ -206,9 +223,10 @@ def run(mod_dir, cfg, dry_run=False, log=print):
 
 def backups_left(mod_dir, cfg):
     game = cfg.get("game", "stardew")
-    adapter = pick_adapter(mod_dir, game, cfg.get("target_lang_code", "it"))
+    code = _lang(cfg)
+    adapter = pick_adapter(mod_dir, game, code)
     workdir = Path(cfg.get("workdir", "~/.modtrans")).expanduser()
-    return Project(workdir, game, adapter.mod_id, adapter.mod_version).backups_left()
+    return Project(workdir, game, adapter.mod_id, adapter.mod_version, (), code).backups_left()
 
 
 def restore(mod_dir, cfg):
@@ -243,16 +261,16 @@ def apply_review(mod_dir, cfg, edits):
     Ritorna il numero di stringhe aggiornate."""
     game, adapter, workdir, project = _open_project(mod_dir, cfg)
     gh = Glossary.load(PKG / "presets" / f"{game}_glossary.json").hash()
-    tm = TranslationMemory(workdir / "tm.sqlite")
     tmk = f"{gh}.{_lang(cfg)}"
     done = 0
-    for key, text in edits.items():
-        cur = project.unit(key)
-        if not cur or not text.strip():
-            continue
-        project.set_unit(key, cur["src"], text, "PUBLISH", gh, via="human")
-        tm.put(game, cur["src"], tmk, text)
-        done += 1
+    with TranslationMemory(workdir / "tm.sqlite") as tm:
+        for key, text in edits.items():
+            cur = project.unit(key)
+            if not cur or not text.strip():
+                continue
+            project.set_unit(key, cur["src"], text, "PUBLISH", gh, via="human")
+            tm.put(game, cur["src"], tmk, text)
+            done += 1
     if done:
         units = adapter.extract()
         mapping = _build_mapping(units, project, adapter.read_output())

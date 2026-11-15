@@ -25,6 +25,7 @@ In the GitHub repository that folder is called `modtrans_pub`: rename it to `mod
 | Command | What it does |
 |---|---|
 | `python -m modtrans translate <mod> -c config.toml` | Translate (only new/changed strings on re-runs) |
+| `python -m modtrans translate <mod> -c config.toml -l fr` | Translate into another language (`-l` overrides `target_lang_code`; `-s English` sets the source language) |
 | `python -m modtrans translate <mod> -c config.toml --dry-run` | Simulate: runs everything, writes nothing to the mod or the translation memory |
 | `python -m modtrans review <mod> -c config.toml` | Show strings waiting for human review (from the last run; makes no AI calls) |
 | `python -m modtrans restore <mod> -c config.toml` | Roll back to the previous backup |
@@ -50,6 +51,8 @@ Don't leave two active sections with the same name.
 | `game` | Which game adapter to use. Only `"stardew"` exists for now. | `"stardew"` |
 | `workdir` | Folder where the tool stores its own data: per-mod manifest, backups, review queue, translation memory. Not inside your mods. On Windows use forward slashes (`"C:/Users/You/modtrans-data"`). | `"~/.modtrans"` |
 | `batch_size` | How many strings go into a single LLM request. Larger = fewer calls/cheaper, but small models get confused with big batches. Cloud: 15–30. Small local models: 5–8. | `15` |
+| `target_lang_code` | Language to translate into, as the code used for the file name (`it` → `i18n/it.json`). Used by the command line; the GUI has its own selector. | `"it"` |
+| `source_lang_name` | Language of the mod: `"Auto"` to detect it, or a name such as `"English"`. | `"Auto"` |
 
 ### The four roles
 

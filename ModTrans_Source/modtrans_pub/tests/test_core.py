@@ -439,6 +439,75 @@ def test_judge_and_repair_errors_do_not_crash_the_run():
     print("errori giudici/repair ok")
 
 
+def test_minor_bugs():
+    import contextlib, io
+    from modtrans import cli
+    from modtrans.core import memory
+    from modtrans.core.langs import lang_name
+    assert lang_name("fr") == "French" and lang_name("pt-BR") == "Portuguese (BR)" and lang_name("xx") == "xx"
+    assert pipeline._lang_names({"target_lang_code": "fr"}) == ("French", "Auto")
+    assert pipeline._lang_names({"target_lang_code": "fr", "target_lang_name": "Français",
+                                 "source_lang_name": "English"}) == ("Français", "English")
+
+    class Spy(MockEngine):
+        systems = []
+        def chat(self, system, user):
+            Spy.systems.append(system)
+            return super().chat(system, user)
+
+    opened = []
+    class TrackedTM(memory.TranslationMemory):
+        def __init__(self, path):
+            super().__init__(path); self.closed = False; opened.append(self)
+        def close(self):
+            super().close(); self.closed = True
+
+    real_engine, real_tm = pipeline.make_engine, pipeline.TranslationMemory
+    pipeline.make_engine = lambda c: Spy() if c.get("type") == "spy" else real_engine(c)
+    pipeline.TranslationMemory = TrackedTM
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            mod = Path(d) / "m"; (mod / "i18n").mkdir(parents=True)
+            (mod / "manifest.json").write_text(json.dumps({"Name": "M", "UniqueID": "a.b", "Version": "1.0"}))
+            (mod / "i18n" / "default.json").write_text(json.dumps({"k": "Hello farmer"}))
+            cfg = {"workdir": str(Path(d) / "w"), "target_lang_code": "fr", "translator": {"type": "spy"}}
+            # solo il codice nel config: i prompt devono dire French, non Italian
+            pipeline.run(mod, cfg, log=lambda *_: None)
+            assert any("French" in s for s in Spy.systems) and not any("Italian" in s for s in Spy.systems)
+            # la translation memory viene chiusa a fine run...
+            assert opened and all(t.closed for t in opened)
+            # ...e anche se il run si interrompe con un errore
+            opened.clear()
+            try:
+                pipeline.run(mod, dict(cfg, translator={"type": "nope"}), log=lambda *_: None)
+                assert False
+            except KeyError:
+                pass
+            assert opened and all(t.closed for t in opened)
+            # i backup contati sono quelli della lingua giusta, e backup.json è JSON valido
+            assert pipeline.backups_left(mod, cfg) == 1
+            bdir = next((Path(d) / "w").rglob("backup.json"))
+            json.loads(bdir.read_text(encoding="utf-8"))
+
+            # riga di comando: -l sceglie la lingua (il nome nel config non deve restare quello vecchio)
+            conf = Path(d) / "config.toml"
+            conf.write_text(f'workdir = "{(Path(d) / "w").as_posix()}"\ntarget_lang_name = "Italian"\n'
+                            '[translator]\ntype = "spy"\n', encoding="utf-8")
+            Spy.systems.clear()
+            with contextlib.redirect_stdout(io.StringIO()):
+                cli.main(["translate", str(mod), "-c", str(conf), "-l", "de", "-s", "English"])
+            assert (mod / "i18n" / "de.json").exists()
+            assert any("from English to German" in s for s in Spy.systems), Spy.systems[:1]
+            try:
+                cli.main(["translate", str(mod), "-c", str(Path(d) / "missing.toml")])
+                assert False
+            except SystemExit as e:
+                assert "Config file not found" in str(e)
+    finally:
+        pipeline.make_engine, pipeline.TranslationMemory = real_engine, real_tm
+    print("bug minori ok")
+
+
 def test_unreviewed_flag():
     class Doubt(MockEngine):
         def chat(self, system, user):
@@ -540,5 +609,5 @@ if __name__ == "__main__":
     test_mask_literal_placeholder_roundtrip(); test_api_key_not_sent_over_plain_http()
     test_languages_never_stack_on_inplace_text(); test_originals_migration_and_author_update()
     test_judge_and_repair_errors_do_not_crash_the_run(); test_number_check_no_blocking_false_positives()
-    test_medium_bugs(); test_unreviewed_flag()
+    test_medium_bugs(); test_unreviewed_flag(); test_minor_bugs()
     print("tests ok")

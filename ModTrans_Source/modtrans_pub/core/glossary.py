@@ -11,7 +11,8 @@ class Glossary:
 
     @classmethod
     def load(cls, path):
-        d = json.load(open(path, encoding="utf-8"))
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
         return cls(d.get("terms", {}), d.get("keep", []))
 
     def hash(self):

@@ -12,6 +12,10 @@ workdir    = "~/.modtrans"   # where the tool keeps manifests, backups, translat
 batch_size = 15              # strings sent to the LLM per request.
                              # Cloud: 15-30 is fine. Small local models: use 5-8.
 
+# Languages (used by the command line; the GUI has its own selectors).
+target_lang_code = "it"      # language to translate into: it, fr, es, de, pt, ru, zh, ja, ko, tr, hu...
+source_lang_name = "Auto"    # language of the mod: "Auto" (detect) or a name such as "English"
+
 # ============================================================================
 #  ENGINES
 #  Every role below (translator, judge_a, judge_b, repair) is configured with
