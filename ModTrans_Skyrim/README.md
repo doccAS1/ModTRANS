@@ -49,6 +49,8 @@ Con il pulsante **Stringhe** si apre una tabella con ogni stringa della mod: tip
 
 Cosa si può fare: cercare nel testo, filtrare per stato (da tradurre / tradotte dall'AI / modificate a mano / non riuscite) e per file, **modificare a mano** ogni traduzione, **tradurre con l'AI una singola riga** (pulsante "AI") o **tutte quelle filtrate** (una nuova risposta ogni volta, senza usare la memoria). Righe vuote o senza testo sono segnate e non si toccano.
 
+**Scarica ora:** il pulsante (nell'editor e, sulla mod in corso, nella lista) produce subito lo zip con lo stato attuale: le righe già tradotte (anche quelle che l'AI sta ancora controllando o accorciando), le tue correzioni, e il resto in originale. Serve per provare la mod in gioco o per non aspettare la fine. Il file si chiama `<mod>_<lingua>_parziale.zip` finché la mod non è finita; non sostituisce il risultato finale, che si produce comunque alla fine della coda. Ricorda che le righe non ancora controllate potrebbero cambiare nella versione finale.
+
 Controlli sulle modifiche a mano: i tag e i segnaposto dell'originale (`<Alias=Player>`, `<mag>`, `%s`, `[pagebreak]`...) devono restare uguali, e il testo deve stare nella codifica del gioco; altrimenti la riga viene rifiutata con il motivo. Testo vuoto = torna alla traduzione dell'AI (o all'originale). Come sempre, il file riscritto viene verificato (struttura identica tranne i testi).
 
 Limiti: restano aperte solo le ultime 3 mod (ognuna occupa lo spazio della mod estratta); una mod vecchia o della cronologia dopo il riavvio non si può riaprire nell'editor, va ritradotta. Per tradurre righe con l'AI da una mod non ancora in coda vengono usate le impostazioni del modulo della pagina; per una mod in coda, quelle della sua coda.

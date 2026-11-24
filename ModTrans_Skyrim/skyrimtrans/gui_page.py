@@ -212,6 +212,7 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
     <select id="edState"><option value="">Tutte</option><option value="todo">Da tradurre</option><option value="done">Tradotte (AI)</option><option value="edited">Modificate a mano</option><option value="failed">Non riuscite</option></select>
     <select id="edFile"><option value="">Tutti i file</option></select>
     <button class="sec sm" id="edAI" type="button">Traduci con l&rsquo;AI quelle filtrate</button>
+    <button class="sec sm" id="edDl" type="button" title="Scarica lo zip con quello che c'è adesso: righe già tradotte e tue correzioni, il resto in originale">Scarica ora</button>
     <button class="sm" id="edSave" type="button">Salva nel file</button>
   </div>
   <div id="edMsg" class="note" style="min-height:20px"></div>
@@ -387,6 +388,7 @@ function jobRow(j){
   const badge=run?(j.phase+(j.total?" "+j.done+"/"+j.total:"")):STATE_TXT[j.state]+(j.dry&&j.state==="done"?" (analisi)":"");
   const r=qrow(j.name,badge,j.state==="done"?"ok":(j.state==="error"?"bad":""),pct,viewJob===j.id,()=>{ viewJob=j.id; autoFollow=false; shownKey=null; refreshView() });
   if(run||j.state==="done") r.acts.appendChild(btn("Stringhe",()=>openEditor(j.id)));
+  if(run){ const a=el("a","sm","Scarica ora"); a.href="/api/proj/download?key="+j.id+"&t="+encodeURIComponent(T); a.download=""; a.title="Zip con le righe tradotte finora; il resto resta in originale"; a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
   if(j.state==="queued"||run) r.acts.appendChild(btn("Annulla",()=>api("/api/cancel/"+j.id,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{})));
   if(j.state==="done"&&j.downloadable){ const a=el("a","sm","Scarica"); a.href="/api/download/"+j.id+"?t="+encodeURIComponent(T); a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
   if(j.state==="done"&&j.saved_to) r.acts.appendChild(btn("Apri cartella",()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#msg").textContent=e.message})));
@@ -484,6 +486,7 @@ $("#edAI").onclick=()=>{
   if(!ED.state) f.state="todo";                      // senza filtro di stato: solo quelle ancora da tradurre
   edTranslate({filter:f});
 };
+$("#edDl").onclick=()=>{ const a=document.createElement("a"); a.href="/api/proj/download?key="+encodeURIComponent(ED.key)+"&t="+encodeURIComponent(T); a.download=""; document.body.appendChild(a); a.click(); a.remove(); edMsg("Preparo lo zip con lo stato attuale…") };
 $("#edSave").onclick=async()=>{
   edMsg("Salvo…");
   try{ const r=await api("/api/proj/save",{method:"POST",body:JSON.stringify({key:ED.key})}); $("#edMsg").dataset.keep="1";
