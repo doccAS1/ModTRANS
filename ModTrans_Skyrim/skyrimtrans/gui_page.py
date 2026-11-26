@@ -155,7 +155,7 @@ a.sm{display:inline-block;text-decoration:none;background:var(--accent);color:va
   <div class="field" id="laneBox" style="margin-top:14px"><label for="laneSel">Metti le mod in</label><select id="laneSel"><option value="new">Una nuova coda (con le impostazioni qui sopra)</option></select>
     <p class="note" id="laneNote" style="margin:6px 0 0"></p>
     <label class="check" style="margin-top:10px"><input type="checkbox" id="remember"><span>Ricorda le code e le chiavi API su questo PC<small>Al prossimo avvio ritrovi le code gi&agrave; pronte, senza reinserire le chiavi. Le chiavi vengono scritte <b>in chiaro</b> in <span id="rememberFile">un file nella tua cartella utente</span>: non usarlo su un PC condiviso. Togliendo la spunta vengono cancellate.</small></span></label></div>
-  <div class="actions"><button id="go" disabled>Traduci</button><button id="stop" class="sec hide">Annulla</button><span id="msg" class="err"></span></div>
+  <div class="actions"><button id="go" disabled>Traduci</button><button id="stop" class="sec hide">Annulla</button><button id="dlLive" class="sec hide" type="button" title="Zip con lo stato attuale: righe già tradotte e tue correzioni, il resto in originale">Scarica ora</button><span id="msg" class="err"></span></div>
 </section>
 
 <section class="card hide" id="progress">
@@ -388,7 +388,8 @@ function jobRow(j){
   const badge=run?(j.phase+(j.total?" "+j.done+"/"+j.total:"")):STATE_TXT[j.state]+(j.dry&&j.state==="done"?" (analisi)":"");
   const r=qrow(j.name,badge,j.state==="done"?"ok":(j.state==="error"?"bad":""),pct,viewJob===j.id,()=>{ viewJob=j.id; autoFollow=false; shownKey=null; refreshView() });
   if(run||j.state==="done") r.acts.appendChild(btn("Stringhe",()=>openEditor(j.id)));
-  if(run){ const a=el("a","sm","Scarica ora"); a.href="/api/proj/download?key="+j.id+"&t="+encodeURIComponent(T); a.download=""; a.title="Zip con le righe tradotte finora; il resto resta in originale"; a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
+  if(j.has_project&&!(j.state==="done"&&j.downloadable)){ const b=btn("Scarica ora",()=>dlNow(j.id,(m,bad)=>{$("#msg").textContent=m;$("#msg").className=bad?"err":"note"}));
+    b.title="Zip con lo stato attuale: righe già tradotte e tue correzioni, il resto in originale"; r.acts.appendChild(b) }
   if(j.state==="queued"||run) r.acts.appendChild(btn("Annulla",()=>api("/api/cancel/"+j.id,{method:"POST",body:"{}"}).then(pollQueue).catch(()=>{})));
   if(j.state==="done"&&j.downloadable){ const a=el("a","sm","Scarica"); a.href="/api/download/"+j.id+"?t="+encodeURIComponent(T); a.onclick=e=>e.stopPropagation(); r.acts.appendChild(a) }
   if(j.state==="done"&&j.saved_to) r.acts.appendChild(btn("Apri cartella",()=>api("/api/open",{method:"POST",body:JSON.stringify({path:j.saved_to})}).catch(e=>{$("#msg").textContent=e.message})));
@@ -415,6 +416,17 @@ function laneBox(l,jobs){
 // ---------------------------------------------------------------- editor delle stringhe
 const ED={key:null,offset:0,limit:100,q:"",state:"",file:"",data:null,timer:null,seq:0};
 const ED_STATE={todo:"da tradurre",done:"tradotte",edited:"a mano",failed:"non riuscite",skip:"senza testo"};
+async function dlNow(key,say){
+  say("Preparo lo zip con lo stato attuale…");
+  try{
+    const r=await fetch("/api/proj/download?key="+encodeURIComponent(key),{headers:{"X-Token":T}});
+    if(!r.ok){ let m="Download non riuscito ("+r.status+")"; try{ m=(await r.json()).error||m }catch(e){} say(m,true); return }
+    const mm=/filename="([^"]+)"/.exec(r.headers.get("Content-Disposition")||""); const name=mm?mm[1]:"mod_parziale.zip";
+    const blob=await r.blob(); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),15000);
+    say("Scaricato "+name+" (righe tradotte finora, tue correzioni; il resto in originale)")
+  }catch(e){ say("Download non riuscito: "+e.message,true) }
+}
 function edMsg(m,bad){ const e=$("#edMsg"); e.textContent=m||""; e.className=bad?"err":"note" }
 async function openEditor(key){
   ED.key=key; ED.offset=0; ED.q=""; ED.state=""; ED.file=""; $("#edQ").value=""; $("#edState").value=""; $("#edFile").innerHTML='<option value="">Tutti i file</option>';
@@ -486,7 +498,8 @@ $("#edAI").onclick=()=>{
   if(!ED.state) f.state="todo";                      // senza filtro di stato: solo quelle ancora da tradurre
   edTranslate({filter:f});
 };
-$("#edDl").onclick=()=>{ const a=document.createElement("a"); a.href="/api/proj/download?key="+encodeURIComponent(ED.key)+"&t="+encodeURIComponent(T); a.download=""; document.body.appendChild(a); a.click(); a.remove(); edMsg("Preparo lo zip con lo stato attuale…") };
+$("#edDl").onclick=()=>dlNow(ED.key,edMsg);
+$("#dlLive").onclick=()=>dlNow(viewJob,(m,bad)=>{$("#msg").textContent=m;$("#msg").className=bad?"err":"note"});
 $("#edSave").onclick=async()=>{
   edMsg("Salvo…");
   try{ const r=await api("/api/proj/save",{method:"POST",body:JSON.stringify({key:ED.key})}); $("#edMsg").dataset.keep="1";
@@ -578,6 +591,7 @@ async function refreshView(){
   $("#barFill").style.width=(j.total?100*j.done/j.total:(j.state==="running"?3:0))+"%";
   const l=$("#log"); l.textContent=j.log.join("\n"); if(live)l.scrollTop=l.scrollHeight;
   $("#stop").classList.toggle("hide",!live);
+  $("#dlLive").classList.toggle("hide",!(live&&j.has_project));
   if(live){ $("#result").classList.add("hide"); shownKey=null; return }
   const key=viewJob+":"+j.state;
   if(shownKey!==key){ shownKey=key; finish(j) }
@@ -613,9 +627,11 @@ function li(parent,items,max){ parent.innerHTML=""; for(const t of items.slice(0
 function finish(j){
   const R=$("#result"); R.classList.remove("hide");
   $("#stats").innerHTML=""; $("#resAction").innerHTML=""; $("#warnBox").classList.add("hide"); $("#failBox").classList.add("hide"); $("#resNote").textContent="";
-  if(j.state==="cancelled"){ $("#resTitle").textContent="Annullato"; $("#resNote").textContent="Nessun file prodotto."; return }
+  if(j.state==="cancelled"){ $("#resTitle").textContent="Annullato"; $("#resNote").textContent="Il lavoro non è stato completato, ma puoi scaricare la mod com'è ora (righe già tradotte; il resto in originale).";
+    if(j.has_project){ const b=document.createElement("button"); b.className="sec"; b.textContent="Scarica ora"; const id=viewJob; b.onclick=()=>dlNow(id,m=>{$("#resNote").textContent=m}); $("#resAction").appendChild(b) } return }
   if(j.state==="error"){ $("#resTitle").textContent="Errore"; const p=document.createElement("p"); p.className="err"; p.textContent=j.error; $("#resAction").appendChild(p);
     if(j.phase==="Interrotto"){ const id=viewJob; const b=document.createElement("button"); b.className="sec"; b.textContent="Riprendi"; b.onclick=()=>retryJob(id); $("#resAction").appendChild(b) }
+    if(j.has_project){ const id=viewJob; const b=document.createElement("button"); b.className="sec"; b.style.marginLeft="10px"; b.textContent="Scarica ora"; b.title="Zip con le righe già tradotte; il resto in originale"; b.onclick=()=>dlNow(id,m=>{$("#resNote").textContent=m}); $("#resAction").appendChild(b) }
     memRefresh(); return }
   const r=j.report;
   $("#resTitle").textContent=j.dry?"Analisi completata":"Traduzione completata";

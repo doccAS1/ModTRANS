@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_gui import start_server, wait  # noqa: E402
 from test_lanes import start, stop  # noqa: E402
-from test_queue import FakeAI, settings, until, upload  # noqa: E402
+from test_queue import FakeAI, queue, settings, until, upload  # noqa: E402
 from skyrimtrans import plugin as pl  # noqa: E402
 
 
@@ -256,3 +256,41 @@ def test_partial_build_ignores_live_when_not_partial(monkeypatch, tmp_path):
     assert "Iron Sword" in texts_in_bytes((tmp_path / "a.zip").read_bytes())
     assert "Spada" in texts_in_bytes((tmp_path / "b.zip").read_bytes())
     httpd.shutdown(); httpd.server_close()
+
+
+def test_download_now_after_cancel_keeps_what_was_already_translated(monkeypatch, tmp_path):
+    """Lavoro annullato a metà: lo zip c'è lo stesso, con le righe già tradotte e il resto in originale."""
+    ai = FakeAI(hold_after=1)                                   # la prima richiesta passa, le altre aspettano
+    httpd, app, c = start_server(monkeypatch, tmp_path)
+    key = start(c, upload(c, "M.esp"), ai, batch_items=1)["job_id"]
+    until(lambda: app.jobs[key].project is not None and app.jobs[key].project.live, "prima riga tradotta")
+    assert json.loads(c.call(f"/api/status/{key}")[1])["has_project"] is True
+    c.call(f"/api/cancel/{key}", {})
+    ai.gate.set()
+    until(lambda: app.jobs[key].state == "cancelled", "annullato")
+    code, cd, data = download(c, key)
+    assert code == 200 and "M_italian_parziale.zip" in cd
+    out = texts_in_bytes(data)
+    assert any(t.startswith("IT ") for t in out)                # qualcosa è stato tradotto...
+    assert any(not t.startswith("IT ") for t in out)            # ...e il resto è com'era, non rotto né perso
+    assert [j for j in queue(c)["jobs"] if j["id"] == key][0]["has_project"] is True
+    stop(httpd, ai)
+
+
+def test_download_now_says_why_when_there_is_nothing_to_download(monkeypatch, tmp_path):
+    slow = FakeAI(gated=True)
+    httpd, app, c = start_server(monkeypatch, tmp_path)
+    uid = upload(c, "M.esp")
+    first = start(c, uid, slow)
+    lane = first["lane_id"]
+    second = start(c, upload(c, "N.esp"), slow, lane=lane)                          # stessa coda: aspetta il suo turno
+    until(lambda: app.jobs[first["job_id"]].project is not None, "primo aperto")
+    code, _, body = download(c, second["job_id"])
+    assert code == 409 and "in coda" in json.loads(body)["error"]
+    assert [j for j in queue(c)["jobs"] if j["id"] == second["job_id"]][0]["has_project"] is False
+    slow.gate.set()
+    assert wait(c, first["job_id"])["state"] == "done"
+    app.jobs[first["job_id"]].project = None                                        # chiusa per fare posto alle altre
+    code, _, body = download(c, first["job_id"])
+    assert code == 404 and "memoria" in json.loads(body)["error"]
+    stop(httpd, slow)
