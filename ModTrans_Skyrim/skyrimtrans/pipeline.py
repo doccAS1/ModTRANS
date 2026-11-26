@@ -467,12 +467,14 @@ class Project:
         return out
 
     # ------------------------------------------------------------------ scrittura
-    def build(self, dest: Path, as_folder: bool = False, overwrite: bool = False) -> Report:
-        """Riscrive i file con le traduzioni attuali (anche quelle a mano) e produce lo zip o la cartella."""
+    def build(self, dest: Path, as_folder: bool = False, overwrite: bool = False, partial: bool = False) -> Report:
+        """Riscrive i file con le traduzioni attuali (anche quelle a mano) e produce lo zip o la cartella.
+        `partial`: a traduzione ancora in corso, include anche le righe già tradotte ma non consolidate;
+        quelle mancanti restano in originale."""
         with self.lock:
-            return self._build(dest, as_folder, overwrite)
+            return self._build(dest, as_folder, overwrite, partial)
 
-    def _build(self, dest: Path, as_folder: bool, overwrite: bool) -> Report:
+    def _build(self, dest: Path, as_folder: bool, overwrite: bool, partial: bool = False) -> Report:
         enc, src_name, tgt_name = self.enc, self.src_name, self.tgt_name
         rep = Report()
         rep.warnings = list(self.rep.warnings) + list(self._jrep.warnings) + list(self._localized_warning)
@@ -482,8 +484,10 @@ class Project:
             shutil.rmtree(out)
         shutil.copytree(self.root, out)
 
+        live = dict(self.live) if partial and self.live else {}
+
         def lookup(u: Unit):
-            t = self.effective(u)
+            t = self.effective(u) or live.get((u.kind, u.text))
             if t is None:
                 why = self.why.get(self.key(u), "non tradotta")
                 if why not in _TRIVIAL:

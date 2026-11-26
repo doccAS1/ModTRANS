@@ -19,8 +19,9 @@ from skyrimtrans.history import History  # noqa: E402
 class FakeAI:
     """Server compatibile OpenAI. Le richieste di traduzione aspettano `gate` (per tenere una mod 'in corso')."""
 
-    def __init__(self, gated=False):
+    def __init__(self, gated=False, hold_after=0):
         self.gate = threading.Event()
+        self.hold_after = hold_after                    # dopo N richieste le successive aspettano `gate` (lavoro 'a metà')
         if not gated:
             self.gate.set()
         self.requests = 0
@@ -38,6 +39,8 @@ class FakeAI:
                     items = json.loads(user)
                     outer.gate.wait(10)
                     outer.requests += 1
+                    if outer.hold_after and outer.requests >= outer.hold_after:
+                        outer.gate.clear()
                     outer.models.add(body["model"])
                     outer.texts += [i["text"] for i in items]
                     reply = json.dumps([{"id": i["id"], "text": "IT " + i["text"]} for i in items])

@@ -538,7 +538,8 @@ def queue_view(app: App) -> dict:
             continue
         jobs.append({"id": j.id, "name": j.name, "lang": j.lang, "state": j.state, "phase": j.phase, "done": j.done,
                      "total": j.total, "dry": j.dry, "saved_to": j.saved_to, "error": j.error, "lane": j.lane_id,
-                     "upload_id": j.upload_id, "downloadable": bool(j.out and j.out.exists())})
+                     "upload_id": j.upload_id, "downloadable": bool(j.out and j.out.exists()),
+                     "has_project": j.project is not None})
     paused = [l for l in lanes if l.paused]
     return {"lanes": [{"id": l.id, "name": l.name, "summary": l.summary(), "paused": l.paused, "pause_msg": l.pause_msg,
                        "busy": bool(l.pending or l.running), "has_key": bool(l.s.get("api_key")),
@@ -644,12 +645,37 @@ def make_handler(app: App, port_holder: list):
                 if not e or e.get("mode") != "zip" or not e["available"] or p is None:
                     return self._json({"error": "File non più disponibile"}, 404)
                 return self._send_zip(p, f"{Path(e['name']).stem}_{e['lang']}.zip")
+            if u.path == "/api/proj/download":
+                key = (q.get("key") or [""])[0]
+                proj = app.project_for(key)
+                job = app.jobs.get(key)
+                if proj is None:
+                    if job and job.state == "queued":
+                        return self._json({"error": "Questa mod è ancora in coda: non è stata aperta, quindi non c'è ancora nulla "
+                                                    "di tradotto da scaricare."}, 409)
+                    if job and job.state == "running":
+                        return self._json({"error": "La mod si sta ancora aprendo: riprova tra qualche secondo."}, 409)
+                    if job:
+                        return self._json({"error": "Lo stato di questa mod non è più in memoria (restano aperte solo quelle degli "
+                                                    f"ultimi {app.MAX_PROJECTS} lavori). Se l'avevi salvata, trovi il file nella cronologia."}, 404)
+                    return self._json({"error": "Questa mod non è più aperta nell'editor: riaprila."}, 404)
+                tmp = app.work / f"parziale-{uuid.uuid4().hex}.zip"
+                try:
+                    proj.build(tmp, as_folder=False, overwrite=True, partial=True)
+                except Exception as e:  # noqa: BLE001 - lo zip non si è potuto preparare: lo si dice
+                    return self._json({"error": f"Non riesco a preparare lo zip: {e}"}, 500)
+                name = job.name if job else app.uploads.get(key[2:], (None, "mod"))[1]
+                done = bool(job and job.state == "done")
+                try:
+                    return self._send_zip(tmp, f"{Path(name).stem}_{proj.target}{'' if done else '_parziale'}.zip")
+                finally:
+                    tmp.unlink(missing_ok=True)
             m = re.fullmatch(r"/api/status/([0-9a-f]{32})", u.path)
             if m and m.group(1) in app.jobs:
                 j = app.jobs[m.group(1)]
                 return self._json({"state": j.state, "phase": j.phase, "done": j.done, "total": j.total,
                                    "log": j.log[-200:], "report": j.report, "error": j.error, "dry": j.dry,
-                                   "saved_to": j.saved_to, "name": j.name, "lang": j.lang})
+                                   "saved_to": j.saved_to, "name": j.name, "lang": j.lang, "has_project": j.project is not None})
             m = re.fullmatch(r"/api/download/([0-9a-f]{32})", u.path)
             if m and m.group(1) in app.jobs and app.jobs[m.group(1)].out:
                 j = app.jobs[m.group(1)]
